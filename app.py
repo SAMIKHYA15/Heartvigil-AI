@@ -109,7 +109,7 @@ import plotly.express as px
 import pandas as pd
 
 # ── Local modules ──────────────────────────────────────────────────────────────
-from supabase_client import get_supabase
+from supabase_client import get_supabase, get_admin_supabase
 from data_agent      import run_data_agent, validate_fields, SAFE_RANGES
 from risk_agent      import run_risk_agent, RISK_COLORS, FEATURE_COLS
 from monitor_agent   import run_monitor_agent, METRIC_LABELS
@@ -121,7 +121,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ── Logo loader ───────────────────────────────────────────────────────────────
-_LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png")
+_LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
 
 def _logo_b64() -> str:
     """Return base64-encoded logo for HTML <img> tags. Empty string if not found."""
@@ -152,8 +152,8 @@ def _inject_css():
         ════════════════════════════════════════════════════════ */
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap');
 
-        html, body, [class*="css"], [class*="st-"] {
-            font-family: 'Inter', 'Plus Jakarta Sans', sans-serif !important;
+        html, body, [class*="css"], .stApp {
+            font-family: 'Inter', 'Plus Jakarta Sans', sans-serif;
         }
 
         /* ════════════════════════════════════════════════════════
@@ -196,6 +196,40 @@ def _inject_css():
         /* ════════════════════════════════════════════════════════
            DARK MODE TOKENS  (Streamlit sets data-theme="dark")
         ════════════════════════════════════════════════════════ */
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --primary:       #A78BFA;
+                --primary-d:     #7C3AED;
+                --primary-l:     #C4B5FD;
+                --primary-glow:  rgba(167,139,250,.20);
+                --accent:        #F472B6;
+                --accent-l:      #FBCFE8;
+
+                --low:           #34D399;
+                --low-bg:        #064E3B;
+                --low-text:      #A7F3D0;
+                --medium:        #FBBF24;
+                --medium-bg:     #451A03;
+                --medium-text:   #FDE68A;
+                --high:          #F87171;
+                --high-bg:       #450A0A;
+                --high-text:     #FCA5A5;
+
+                --bg:            #0F0B1A;
+                --bg2:           #16102B;
+                --surface:       #1C1533;
+                --surface2:      #231B40;
+                --surface3:      #2D2250;
+                --text:          #F3F0FF;
+                --text-2:        #DDD6FE;
+                --text-muted:    #9CA3AF;
+                --border:        #3D3166;
+                --border-2:      #2D2550;
+                --shadow:        0 4px 24px rgba(0,0,0,.40);
+                --shadow-lg:     0 12px 48px rgba(0,0,0,.60);
+            }
+        }
+        
         [data-theme="dark"] {
             --primary:       #A78BFA;
             --primary-d:     #7C3AED;
@@ -536,27 +570,30 @@ def _inject_css():
         /* ════════════════════════════════════════════════════════
            FORM INPUTS
         ════════════════════════════════════════════════════════ */
-        .stTextInput > div > div > input,
-        .stNumberInput > div > div > input {
-            background: var(--surface2) !important;
+        [data-baseweb="input"] {
+            background: var(--surface) !important;
             border: 1.5px solid var(--border) !important;
             border-radius: var(--radius-sm) !important;
-            color: var(--text) !important;
-            font-size: .95rem !important;
             transition: border-color .18s, box-shadow .18s !important;
         }
-        .stTextInput > div > div > input:focus,
-        .stNumberInput > div > div > input:focus {
+        [data-baseweb="input"]:focus-within {
             border-color: var(--primary) !important;
             box-shadow: 0 0 0 3px var(--primary-glow) !important;
-            outline: none !important;
         }
-        .stTextInput > div > div > input::placeholder,
-        .stNumberInput > div > div > input::placeholder {
+        [data-baseweb="base-input"] {
+            background: transparent !important;
+        }
+        [data-baseweb="input"] input,
+        [data-baseweb="input"] button {
+            color: var(--text) !important;
+            background: transparent !important;
+            font-size: .95rem !important;
+        }
+        [data-baseweb="input"] input::placeholder {
             color: var(--text-muted) !important;
         }
         .stSelectbox > div > div {
-            background: var(--surface2) !important;
+            background: var(--surface) !important;
             border: 1.5px solid var(--border) !important;
             border-radius: var(--radius-sm) !important;
             color: var(--text) !important;
@@ -639,9 +676,16 @@ def _inject_css():
             border: 1px solid var(--border) !important;
             border-radius: var(--radius) !important;
         }
+        [data-testid="stExpander"] details, [data-testid="stExpander"] summary {
+            background: var(--surface) !important;
+            color: var(--text) !important;
+        }
         [data-testid="stExpander"] summary p {
             color: var(--text) !important;
             font-weight: 600 !important;
+        }
+        [data-testid="stExpander"] .material-symbols-rounded {
+            color: var(--text) !important;
         }
 
         /* ════════════════════════════════════════════════════════
@@ -801,11 +845,12 @@ def _supabase():
 
 def _get_or_create_user(email: str) -> Optional[Dict]:
     try:
-        sb = _supabase()
-        res = sb.table("users").select("*").eq("email", email).execute()
+        # User creation requires bypassing RLS, so use the admin client
+        sb_admin = get_admin_supabase()
+        res = sb_admin.table("users").select("*").eq("email", email).execute()
         if res.data:
             return res.data[0]
-        ins = sb.table("users").insert({"email": email}).execute()
+        ins = sb_admin.table("users").insert({"email": email}).execute()
         return ins.data[0] if ins.data else None
     except Exception as exc:
         logger.error("User upsert error: %s", exc)
@@ -988,117 +1033,46 @@ def _auth_page():
     #MainMenu, footer, header { visibility: hidden !important; }
     .block-container { padding: 0 !important; max-width: 100% !important; }
     .auth-bg {
-        min-height: 100vh; display: flex; align-items: center;
-        justify-content: center;
-        background: linear-gradient(135deg, #0F0B1A 0%, #1a0d38 40%, #2D1B69 70%, #5B21B6 100%);
-        padding: 2rem 1rem; position: relative; overflow: hidden;
-    }
-    .auth-bg::before {
-        content: ""; position: fixed; top: -120px; right: -120px;
-        width: 450px; height: 450px;
-        background: radial-gradient(circle, rgba(236,72,153,.28) 0%, transparent 65%);
-        pointer-events: none; animation: blob1 9s ease-in-out infinite;
-    }
-    .auth-bg::after {
-        content: ""; position: fixed; bottom: -100px; left: -100px;
-        width: 380px; height: 380px;
-        background: radial-gradient(circle, rgba(124,58,237,.32) 0%, transparent 65%);
-        pointer-events: none; animation: blob1 11s ease-in-out infinite reverse;
-    }
-    @keyframes blob1 {
-        0%,100% { transform: translateY(0) scale(1); }
-        50%      { transform: translateY(-28px) scale(1.06); }
+        /* Deprecated since st.columns handles layout */
     }
     .auth-card {
-        background: rgba(255,255,255,.055);
-        backdrop-filter: blur(28px); -webkit-backdrop-filter: blur(28px);
-        border: 1px solid rgba(196,181,253,.18);
-        border-radius: 28px; padding: 2.8rem 2.5rem 2.4rem;
-        width: 100%; max-width: 460px;
-        box-shadow: 0 32px 80px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.08);
-        position: relative; z-index: 1;
-        animation: cardIn .5s cubic-bezier(.22,1,.36,1) both;
-    }
-    @keyframes cardIn {
-        from { opacity:0; transform: translateY(28px) scale(.97); }
-        to   { opacity:1; transform: translateY(0)    scale(1);   }
+        /* Not used currently in DOM but kept for safety */
     }
     .auth-heart-ring {
-        display: inline-flex; align-items: center; justify-content: center;
-        width: 76px; height: 76px; border-radius: 50%;
-        background: linear-gradient(135deg, #6D28D9, #EC4899);
-        font-size: 2.2rem; margin-bottom: .9rem;
-        animation: heartPulse 2.6s ease infinite;
-        box-shadow: 0 0 0 0 rgba(124,58,237,.5);
-    }
-    @keyframes heartPulse {
-        0%,100% { box-shadow: 0 0 0 0    rgba(124,58,237,.45); transform: scale(1);    }
-        50%      { box-shadow: 0 0 0 14px rgba(124,58,237,0);   transform: scale(1.07); }
+        display: none; /* Removed the ring for the new logo */
     }
     .auth-title {
         font-size: 1.85rem; font-weight: 900; letter-spacing:-.025em;
-        color: #fff !important;
-        text-shadow: 0 2px 16px rgba(124,58,237,.6);
+        color: var(--text) !important;
+        text-shadow: none;
         margin: 0 0 .15rem;
     }
-    .auth-subtitle { font-size:.86rem; color:rgba(196,181,253,.7) !important; margin:0 0 2rem; }
+    .auth-subtitle { font-size:.86rem; color:var(--text-muted) !important; margin:0 0 2rem; }
     .auth-step-pill {
-        display:inline-block; background:rgba(124,58,237,.3);
-        border:1px solid rgba(196,181,253,.3); border-radius:999px;
+        display:inline-block; background:var(--surface3);
+        border:1px solid var(--border); border-radius:999px;
         padding:.22rem .8rem; font-size:.72rem; font-weight:700;
-        color:#C4B5FD !important; letter-spacing:.07em;
+        color:var(--primary) !important; letter-spacing:.07em;
         text-transform:uppercase; margin-bottom:.75rem;
     }
-    .auth-heading { font-size:1.2rem; font-weight:800; color:#fff !important; margin-bottom:.3rem; }
-    .auth-caption { font-size:.85rem; color:rgba(196,181,253,.68) !important; margin-bottom:1.3rem; line-height:1.6; }
-    .auth-card .stTextInput>div>div>input {
-        background:rgba(255,255,255,.07) !important;
-        border:1.5px solid rgba(196,181,253,.28) !important;
-        border-radius:13px !important; color:#fff !important;
-        font-size:.97rem !important; padding:.68rem 1rem !important;
-        transition: border-color .18s, box-shadow .18s !important;
-    }
-    .auth-card .stTextInput>div>div>input::placeholder { color:rgba(196,181,253,.38) !important; }
-    .auth-card .stTextInput>div>div>input:focus {
-        border-color:#A78BFA !important;
-        box-shadow:0 0 0 3px rgba(124,58,237,.28) !important; outline:none !important;
-    }
-    .auth-card .stTextInput label { color:rgba(196,181,253,.75) !important; font-weight:600 !important; font-size:.83rem !important; }
-    .auth-card [data-testid="baseButton-primary"] {
-        background: linear-gradient(135deg,#5B21B6,#7C3AED,#A855F7) !important;
-        border:none !important; border-radius:13px !important;
-        font-size:.97rem !important; font-weight:800 !important; color:#fff !important;
-        box-shadow:0 6px 22px rgba(91,33,182,.55) !important;
-        letter-spacing:.015em; padding:.72rem !important;
-        transition: all .2s !important;
-    }
-    .auth-card [data-testid="baseButton-primary"]:hover {
-        transform:translateY(-2px) !important;
-        box-shadow:0 10px 30px rgba(91,33,182,.7) !important;
-    }
-    .auth-card .stButton>button:not([data-testid="baseButton-primary"]) {
-        background:rgba(255,255,255,.06) !important;
-        border:1px solid rgba(196,181,253,.22) !important;
-        border-radius:13px !important; color:#C4B5FD !important; font-weight:600 !important;
-    }
-    .auth-card .stButton>button:not([data-testid="baseButton-primary"]):hover {
-        background:rgba(255,255,255,.12) !important;
-        border-color:rgba(196,181,253,.45) !important;
-    }
+    .auth-heading { font-size:1.2rem; font-weight:800; color:var(--text) !important; margin-bottom:.3rem; }
+    .auth-caption { font-size:.85rem; color:var(--text-muted) !important; margin-bottom:1.3rem; line-height:1.6; }
+    
     .auth-email-badge {
-        background:rgba(124,58,237,.22); border:1px solid rgba(196,181,253,.28);
+        background:var(--surface3); border:1px solid var(--border);
         border-radius:11px; padding:.5rem .9rem; margin-bottom:1.1rem;
-        font-size:.86rem; color:#C4B5FD !important; font-weight:600;
+        font-size:.86rem; color:var(--primary) !important; font-weight:600;
         display:flex; align-items:center; gap:.5rem;
     }
     .auth-chips { display:flex; gap:.45rem; flex-wrap:wrap; justify-content:center; margin-top:1.6rem; }
     .auth-chip {
-        background:rgba(255,255,255,.05); border:1px solid rgba(196,181,253,.18);
+        background:var(--surface); border:1px solid var(--border);
         border-radius:999px; padding:.22rem .75rem;
-        font-size:.71rem; color:rgba(196,181,253,.6) !important; font-weight:500;
+        font-size:.71rem; color:var(--text-2) !important; font-weight:500;
+        box-shadow: 0 2px 4px rgba(0,0,0,.04);
     }
     .auth-divider {
-        border:none; border-top:1px solid rgba(196,181,253,.12); margin:1.5rem 0 1.2rem;
+        border:none; border-top:1px solid var(--border); margin:1.5rem 0 1.2rem; opacity: 0.6;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -1108,13 +1082,13 @@ def _auth_page():
         _b64 = _logo_b64()
         logo_inner = (
             f'<img src="data:image/png;base64,{_b64}" '
-            f'style="width:48px;height:48px;object-fit:contain;border-radius:50%;">'
+            f'style="width:220px;height:auto;object-fit:contain;margin-bottom:0.5rem;filter:drop-shadow(0 4px 12px rgba(124,58,237,.15));">'
             if _b64 else "🧡"
         )
         st.markdown(f"""
-        <div style="text-align:center;padding-top:2rem;">
-          <div class="auth-heart-ring">{logo_inner}</div>
-          <div class="auth-title">HeartVigil AI</div>
+        <div style="text-align:center;padding-top:1rem;">
+          <div>{logo_inner}</div>
+          <!-- Removing Title since the text is likely in the logo image itself, leaving subtitle -->
           <div class="auth-subtitle">AI-Powered Heart Disease Risk Platform</div>
         </div>
         """, unsafe_allow_html=True)
@@ -1227,7 +1201,7 @@ def _auth_page():
           <span class="auth-chip">📈 Risk Tracking</span>
           <span class="auth-chip">📋 PDF Reports</span>
         </div>
-        <p style="text-align:center;font-size:.72rem;color:rgba(196,181,253,.4);margin-top:1.1rem;">
+        <p style="text-align:center;font-size:.72rem;color:var(--text-muted);margin-top:1.1rem;opacity:0.7;">
           For educational and research purposes only
         </p>
         """, unsafe_allow_html=True)
@@ -2507,10 +2481,9 @@ def _page_monitoring():
         st.markdown('<p class="section-title">\u26a0\ufe0f Health Alerts</p>', unsafe_allow_html=True)
         for a in alerts:
             sev = a["severity"]
-            color = "#EF4444" if sev == "HIGH" else "#F59E0B"
+            cls = "alert-high" if sev == "HIGH" else "alert-medium"
             st.markdown(
-                f'<div style="background:{color}12;border-left:4px solid {color};'
-                f'border-radius:0 10px 10px 0;padding:.7rem 1rem;margin-bottom:.5rem;">' +
+                f'<div class="{cls}">'
                 f'\u26a0 <strong>{a["message"]}</strong> \u2014 <em>{a["pct"]}</em></div>',
                 unsafe_allow_html=True,
             )
@@ -2518,7 +2491,7 @@ def _page_monitoring():
     # ─── AI Summary ────────────────────────────────────────────────────────────
     if ai_sum:
         with st.expander("AI Health Trend Summary", expanded=True):
-            st.markdown(f'<div style="line-height:1.75;font-size:.95rem;">{ai_sum}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="line-height:1.75;font-size:.95rem;color:var(--text);">{ai_sum}</div>', unsafe_allow_html=True)
 
     # ─── Risk Score Timeline (large, prominent) ────────────────────────────────
     st.markdown('<p class="section-title">\U0001f4c8 Risk Score Over Time</p>', unsafe_allow_html=True)

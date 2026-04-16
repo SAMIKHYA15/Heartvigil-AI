@@ -181,7 +181,7 @@ def _compute_direction(
     if previous is None:
         return {
             "direction":       "first",
-            "direction_icon":  "🆕",
+            "direction_icon":  "\u2605",   # star
             "direction_color": "#6B46C1",
             "score_change":    0.0,
             "prev_label":      None,
@@ -198,15 +198,15 @@ def _compute_direction(
 
     if change <= -3:
         direction = "improved"
-        icon  = "✅"
+        icon  = "\u2713"   # check mark
         color = "#10B981"
     elif change >= 3:
         direction = "worsened"
-        icon  = "⚠️"
+        icon  = "\u26a0"   # warning triangle (no variation selector)
         color = "#EF4444"
     else:
         direction = "stable"
-        icon  = "➡️"
+        icon  = "\u2192"   # right arrow
         color = "#F59E0B"
 
     # Which fields changed significantly?
@@ -226,7 +226,7 @@ def _compute_direction(
                 continue
             abs_chg = abs(pct_change)
             if abs_chg >= 5:
-                direction_f = "↑ increased" if pct_change > 0 else "↓ decreased"
+                direction_f = "\u25b2 increased" if pct_change > 0 else "\u25bc decreased"
                 changed_fields.append({
                     "field":     field,
                     "label":     field_labels[field],
