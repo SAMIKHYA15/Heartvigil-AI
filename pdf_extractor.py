@@ -9,6 +9,7 @@ import logging
 from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
+from ai_helper import call_groq
 
 # ── Field extraction patterns ──────────────────────────────────────────────────
 PATTERNS: Dict[str, list] = {
@@ -104,6 +105,49 @@ def _search_patterns(text: str, patterns: list) -> Optional[str]:
     return None
 
 
+def _extract_with_llm(text: str) -> Dict[str, Optional[float]]:
+    """Use Groq LLM to extract 13 UCI features from text in JSON format."""
+    system_prompt = (
+        "You are a medical data extraction expert. Extract the 13 UCI Heart Disease features from the provided medical report text. "
+        "Return ONLY a JSON object with the following keys and map clinical findings to the specific numeric codes provided:\n\n"
+        "1. 'age': numeric\n"
+        "2. 'sex': 1 for male, 0 for female\n"
+        "3. 'cp' (chest pain type): 0: Typical Angina, 1: Atypical Angina, 2: Non-Anginal Pain, 3: Asymptomatic\n"
+        "4. 'trestbps' (resting blood pressure): numeric systolic value (e.g., 120 from 120/80)\n"
+        "5. 'chol' (serum cholesterol): numeric mg/dL\n"
+        "6. 'fbs' (fasting blood sugar): 1 if > 120 mg/dL, else 0\n"
+        "7. 'restecg' (resting ECG): 0: Normal, 1: ST-T wave abnormality, 2: Left ventricular hypertrophy\n"
+        "8. 'thalach' (max heart rate): numeric bpm\n"
+        "9. 'exang' (exercise induced angina): 1 for yes/present, 0 for no/absent\n"
+        "10. 'oldpeak' (ST depression): numeric value (e.g., 1.5)\n"
+        "11. 'slope' (ST slope): 0: Upsloping, 1: Flat, 2: Downsloping\n"
+        "12. 'ca' (major vessels): 0-4 numeric\n"
+        "13. 'thal' (perfusion/thalassemia): 1: Normal, 2: Fixed defect, 3: Reversible defect\n\n"
+        "If a value is not found, use null. Provide ONLY valid JSON. No conversational filler."
+    )
+    
+    import json
+    response = call_groq(
+        system_prompt=system_prompt,
+        user_prompt=f"Medical Report Text:\n{text}",
+        fallback="{}"
+    )
+    
+    try:
+        # Strip potential markdown formatting
+        if "```json" in response:
+            response = response.split("```json")[1].split("```")[0].strip()
+        elif "```" in response:
+            response = response.split("```")[1].split("```")[0].strip()
+        
+        data = json.loads(response)
+        # Ensure all values are floats or None
+        return {k: float(v) if v is not None else None for k, v in data.items() if k in PATTERNS}
+    except Exception as exc:
+        logger.warning("LLM extraction or JSON parsing failed: %s", exc)
+        return {}
+
+
 def extract_features_from_pdf(file_bytes: bytes) -> Dict[str, Optional[float]]:
     """
     Extract all 13 UCI Heart Disease features from a PDF.
@@ -122,58 +166,66 @@ def extract_features_from_pdf(file_bytes: bytes) -> Dict[str, Optional[float]]:
     if not text:
         return {}
 
-    result: Dict[str, Optional[float]] = {}
+    # Attempt LLM extraction first
+    result = _extract_with_llm(text)
+    n_llm = sum(1 for v in result.values() if v is not None)
+    
+    # If LLM missed fields, attempt regex fallback for those specific fields
+    if n_llm < len(PATTERNS):
+        logger.info("LLM missed %d fields, trying regex fallback...", len(PATTERNS) - n_llm)
+        for field, patterns in PATTERNS.items():
+            if result.get(field) is not None:
+                continue
+            
+            raw = _search_patterns(text, patterns)
+            if raw is None:
+                result[field] = None
+                continue
 
-    for field, patterns in PATTERNS.items():
-        raw = _search_patterns(text, patterns)
-        if raw is None:
-            result[field] = None
-            continue
+            raw = raw.strip().lower()
 
-        raw = raw.strip().lower()
+            # Field-specific normalisation (rest of the logic remains same)
+            if field == "sex":
+                result[field] = float(_SEX_MAP.get(raw, 1))
 
-        # Field-specific normalisation
-        if field == "sex":
-            result[field] = float(_SEX_MAP.get(raw, 1))
+            elif field == "cp":
+                # Try keyword first
+                matched = next(
+                    (v for k, v in _CP_KEYWORDS.items() if k in raw), None
+                )
+                if matched is not None:
+                    result[field] = float(matched)
+                else:
+                    try:
+                        result[field] = float(raw)
+                    except ValueError:
+                        result[field] = None
 
-        elif field == "cp":
-            # Try keyword first
-            matched = next(
-                (v for k, v in _CP_KEYWORDS.items() if k in raw), None
-            )
-            if matched is not None:
-                result[field] = float(matched)
+            elif field == "fbs":
+                try:
+                    glucose = float(raw)
+                    result[field] = 1.0 if glucose > 120 else 0.0
+                except ValueError:
+                    result[field] = None
+
+            elif field in ("exang",):
+                result[field] = float(_YESNO_MAP.get(raw, 0))
+
+            elif field == "thal":
+                if raw in _THAL_MAP:
+                    result[field] = float(_THAL_MAP[raw])
+                else:
+                    try:
+                        result[field] = float(raw)
+                    except ValueError:
+                        result[field] = None
+
             else:
                 try:
                     result[field] = float(raw)
                 except ValueError:
                     result[field] = None
-
-        elif field == "fbs":
-            try:
-                glucose = float(raw)
-                result[field] = 1.0 if glucose > 120 else 0.0
-            except ValueError:
-                result[field] = None
-
-        elif field in ("exang",):
-            result[field] = float(_YESNO_MAP.get(raw, 0))
-
-        elif field == "thal":
-            if raw in _THAL_MAP:
-                result[field] = float(_THAL_MAP[raw])
-            else:
-                try:
-                    result[field] = float(raw)
-                except ValueError:
-                    result[field] = None
-
-        else:
-            try:
-                result[field] = float(raw)
-            except ValueError:
-                result[field] = None
-
+    
     n_found = sum(1 for v in result.values() if v is not None)
     logger.info("PDF extractor found %d / %d fields.", n_found, len(PATTERNS))
     return result

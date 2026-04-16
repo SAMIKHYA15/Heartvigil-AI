@@ -76,10 +76,14 @@ def load_data():
         sys.exit(1)
     df = pd.read_csv(csv)
     target_col = "target" if "target" in df.columns else "num"
-    # Binarise (UCI raw has 0=None, 1-4=Disease)
-    # BUT this heart.csv has 0=Disease, 1=No Disease (Ronit/Kaggle inversion)
-    # We want Class 1 to be Disease Presence.
-    df[target_col] = (df[target_col] == 0).astype(int)
+    
+    # Correct label mapping:
+    # 1. Kaggle dataset: natively 1=healthy, 0=disease. We invert it so 1=disease, 0=healthy.
+    # 2. Original UCI dataset: 0=healthy, 1-4=disease presence.
+    if target_col == "target":
+        df[target_col] = 1 - df[target_col]
+    else:
+        df[target_col] = (df[target_col] > 0).astype(int)
     # Remove rows with physiologically impossible values
     df = df[(df["trestbps"] > 0) & (df["chol"] > 0) & (df["thalach"] > 0)]
     X = df[FEATURE_COLS].copy()
