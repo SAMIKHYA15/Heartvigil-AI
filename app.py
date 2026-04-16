@@ -144,6 +144,84 @@ st.set_page_config(
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  HELPER: styled HTML table renderer
+# ══════════════════════════════════════════════════════════════════════════════
+def _render_styled_table(df, title: str = "", subtitle: str = "") -> None:
+    """Render a DataFrame as a premium styled HTML table with risk-label badges."""
+    import html as esc
+
+    BADGE = {
+        "HIGH":    ("#FEE2E2", "#DC2626", "#7F1D1D"),
+        "MEDIUM":  ("#FEF3C7", "#D97706", "#78350F"),
+        "LOW":     ("#D1FAE5", "#059669", "#064E3B"),
+        "Pending": ("#F3F4F6", "#6B7280", "#374151"),
+    }
+
+    def _cell(val, col):
+        s = str(val)
+        if col in ("Risk Label", "risk_label"):
+            bg, border, txt = BADGE.get(s, BADGE["Pending"])
+            return (
+                f'<span style="background:{bg};color:{txt};border:1.5px solid {border};'
+                f'border-radius:999px;padding:3px 12px;font-size:.78rem;font-weight:700;'
+                f'letter-spacing:.04em;white-space:nowrap;">{s}</span>'
+            )
+        if col in ("Risk Score", "risk_score") and s not in ("", "nan", "Pending", "None"):
+            try:
+                v = float(s.replace("%",""))
+                color = "#DC2626" if v >= 60 else "#D97706" if v >= 40 else "#059669"
+                return f'<span style="color:{color};font-weight:700;">{s}</span>'
+            except Exception:
+                pass
+        return esc.escape(s)
+
+    headers = "".join(
+        f'<th style="padding:10px 16px;text-align:left;font-size:.8rem;font-weight:700;'
+        f'color:#6B46C1;text-transform:uppercase;letter-spacing:.06em;'
+        f'border-bottom:2px solid #EDE9FE;white-space:nowrap;">{c}</th>'
+        for c in df.columns
+    )
+    rows_html = ""
+    for i, (_, row) in enumerate(df.iterrows()):
+        bg = "#FAFAFA" if i % 2 == 0 else "#FFFFFF"
+        cells = "".join(
+            f'<td style="padding:10px 16px;font-size:.88rem;color:#1E1B2E;'
+            f'border-bottom:1px solid #EDE9FE;">{_cell(v, c)}</td>'
+            for c, v in zip(df.columns, row)
+        )
+        rows_html += (
+            f'<tr style="background:{bg};transition:background .15s;" '
+            f'onmouseover="this.style.background=\'#F5F3FF\'" '
+            f'onmouseout="this.style.background=\'{bg}\'">{cells}</tr>'
+        )
+
+    hdr_html = ""
+    if title:
+        hdr_html = (
+            f'<div style="margin-bottom:.6rem;">'
+            f'<span style="font-size:1rem;font-weight:800;color:#1E1B2E;">{title}</span>'
+            + (f'<span style="font-size:.8rem;color:#6B7280;margin-left:.6rem;">{subtitle}</span>' if subtitle else "")
+            + "</div>"
+        )
+
+    html_table = f"""
+    {hdr_html}
+    <div style="border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(107,70,193,.10);
+                border:1.5px solid #EDE9FE;background:#fff;">
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;">
+          <thead style="background:linear-gradient(135deg,#F5F3FF,#EDE9FE);">
+            <tr>{headers}</tr>
+          </thead>
+          <tbody>{rows_html}</tbody>
+        </table>
+      </div>
+    </div>
+    """
+    st.markdown(html_table, unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  GLOBAL CSS
 # ══════════════════════════════════════════════════════════════════════════════
 def _inject_css():
@@ -785,6 +863,15 @@ def _supabase_admin():
     return get_admin_supabase()
 
 
+def _user_id() -> Optional[str]:
+    """Return the authenticated user's ID from session state, or None."""
+    user = st.session_state.get("user")
+    if not user:
+        return None
+    uid = user.get("id")
+    return str(uid) if uid else None
+
+
 def _get_or_create_user(email: str) -> Optional[Dict]:
     try:
         # User creation requires bypassing RLS, so use the admin client
@@ -970,91 +1057,172 @@ def _init_session():
 #  AUTH PAGE
 # ══════════════════════════════════════════════════════════════════════════════
 def _auth_page():
+    _b64 = _logo_b64()
+    logo_html = (
+        f'<img src="data:image/png;base64,{_b64}" '
+        f'style="width:270px;height:auto;'
+        f'filter:drop-shadow(0 10px 32px rgba(0,0,0,.40)) brightness(1.05);">'
+        if _b64 else '<div style="font-size:5rem;margin-bottom:1rem;">❤️</div>'
+    )
+
     st.markdown("""
     <style>
     #MainMenu, footer, header { visibility: hidden !important; }
-    .block-container { padding: 0 !important; max-width: 100% !important; }
-    .auth-bg {
-        /* Deprecated since st.columns handles layout */
+
+    /* ── Full-page background ── */
+    .stApp, .main {
+        background: radial-gradient(ellipse at 20% 50%, #3B1FA3 0%, #1a0533 45%, #080312 100%) !important;
+        min-height: 100vh;
     }
-    .auth-card {
-        /* Not used currently in DOM but kept for safety */
+    .block-container {
+        padding: 0 !important;
+        max-width: 100% !important;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
     }
-    .auth-heart-ring {
-        display: none; /* Removed the ring for the new logo */
+
+    /* ════════════════════════════════════════════════════
+       THE CARD = top-level stHorizontalBlock only
+       :not(...) prevents nested column blocks (like
+       verify/back buttons) from getting the same styles.
+    ════════════════════════════════════════════════════ */
+    [data-testid="stHorizontalBlock"]:not([data-testid="stHorizontalBlock"] [data-testid="stHorizontalBlock"]) {
+        max-width: 900px !important;
+        width: 90vw !important;
+        margin: 0 auto !important;
+        border-radius: 24px !important;
+        overflow: hidden !important;
+        box-shadow: 0 40px 100px rgba(0,0,0,.6),
+                    0 4px 20px rgba(107,70,193,.35) !important;
+        min-height: 560px !important;
+        align-items: stretch !important;
     }
-    .auth-title {
-        font-size: 1.85rem; font-weight: 900; letter-spacing:-.025em;
-        color: var(--text) !important;
-        text-shadow: none;
-        margin: 0 0 .15rem;
+
+    /* ── LEFT column = purple branding panel (top-level only) ── */
+    [data-testid="stHorizontalBlock"]:not([data-testid="stHorizontalBlock"] [data-testid="stHorizontalBlock"]) > div:first-child,
+    [data-testid="stHorizontalBlock"]:not([data-testid="stHorizontalBlock"] [data-testid="stHorizontalBlock"]) > div:first-child > div:first-child {
+        background: linear-gradient(160deg, #5B21B6 0%, #4C1D95 40%, #2E1065 100%) !important;
+        padding: 3rem 2.5rem !important;
+        min-height: 560px !important;
     }
-    .auth-subtitle { font-size:.86rem; color:var(--text-muted) !important; margin:0 0 2rem; }
+
+    /* ── RIGHT column = white form panel (top-level only) ── */
+    [data-testid="stHorizontalBlock"]:not([data-testid="stHorizontalBlock"] [data-testid="stHorizontalBlock"]) > div:last-child,
+    [data-testid="stHorizontalBlock"]:not([data-testid="stHorizontalBlock"] [data-testid="stHorizontalBlock"]) > div:last-child > div:first-child {
+        background: #FFFFFF !important;
+        padding: 2.8rem 2.6rem !important;
+        min-height: 560px !important;
+    }
+
+    /* Nested columns (buttons row) inherit transparent bg */
+    [data-testid="stHorizontalBlock"] [data-testid="stHorizontalBlock"] {
+        min-height: unset !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+        overflow: visible !important;
+        width: 100% !important;
+        margin: 0 !important;
+        background: transparent !important;
+    }
+    [data-testid="stHorizontalBlock"] [data-testid="stHorizontalBlock"] > div,
+    [data-testid="stHorizontalBlock"] [data-testid="stHorizontalBlock"] > div > div {
+        background: transparent !important;
+        padding: 0 !important;
+        min-height: unset !important;
+    }
+
+    /* ── Form typography (right panel) ── */
     .auth-step-pill {
-        display:inline-block; background:var(--surface3);
-        border:1px solid var(--border); border-radius:999px;
-        padding:.22rem .8rem; font-size:.72rem; font-weight:700;
-        color:var(--primary) !important; letter-spacing:.07em;
-        text-transform:uppercase; margin-bottom:.75rem;
+        display:inline-block; background:#EDE9FE;
+        border:1px solid #DDD6FE; border-radius:999px;
+        padding:.22rem .85rem; font-size:.72rem; font-weight:700;
+        color:#6B46C1 !important; letter-spacing:.08em;
+        text-transform:uppercase; margin-bottom:.85rem;
     }
-    .auth-heading { font-size:1.2rem; font-weight:800; color:var(--text) !important; margin-bottom:.3rem; }
-    .auth-caption { font-size:.85rem; color:var(--text-muted) !important; margin-bottom:1.3rem; line-height:1.6; }
-    
+    .auth-heading {
+        font-size:1.55rem; font-weight:900; color:#1E1B2E !important;
+        margin-bottom:.35rem; line-height:1.2;
+    }
+    .auth-caption {
+        font-size:.86rem; color:#6B7280 !important;
+        margin-bottom:1.6rem; line-height:1.65;
+    }
     .auth-email-badge {
-        background:var(--surface3); border:1px solid var(--border);
-        border-radius:11px; padding:.5rem .9rem; margin-bottom:1.1rem;
-        font-size:.86rem; color:var(--primary) !important; font-weight:600;
-        display:flex; align-items:center; gap:.5rem;
-    }
-    .auth-chips { display:flex; gap:.45rem; flex-wrap:wrap; justify-content:center; margin-top:1.6rem; }
-    .auth-chip {
-        background:var(--surface); border:1px solid var(--border);
-        border-radius:999px; padding:.22rem .75rem;
-        font-size:.71rem; color:var(--text-2) !important; font-weight:500;
-        box-shadow: 0 2px 4px rgba(0,0,0,.04);
+        background:#F5F3FF; border:1px solid #DDD6FE;
+        border-radius:12px; padding:.55rem 1rem; margin-bottom:1.2rem;
+        font-size:.86rem; color:#6B46C1 !important; font-weight:600;
     }
     .auth-divider {
-        border:none; border-top:1px solid var(--border); margin:1.5rem 0 1.2rem; opacity: 0.6;
+        border:none; border-top:1px solid #EDE9FE; margin:1.4rem 0 1rem;
+    }
+    .auth-chips { display:flex; gap:.4rem; flex-wrap:wrap; margin-top:.6rem; }
+    .auth-chip {
+        background:#F5F3FF; border:1px solid #DDD6FE;
+        border-radius:999px; padding:.2rem .7rem;
+        font-size:.7rem; color:#5B21B6 !important; font-weight:600;
+    }
+
+    /* Right panel: keep Streamlit text inputs legible */
+    [data-testid="stHorizontalBlock"] > div:last-child label {
+        color: #374151 !important;
+    }
+    [data-testid="stHorizontalBlock"] > div:last-child p {
+        color: #1E1B2E !important;
     }
     </style>
     """, unsafe_allow_html=True)
 
-    _, col, _ = st.columns([1, 2, 1])
-    with col:
-        _b64 = _logo_b64()
-        logo_inner = (
-            f'<img src="data:image/png;base64,{_b64}" '
-            f'style="width:220px;height:auto;object-fit:contain;margin-bottom:0.5rem;filter:drop-shadow(0 4px 12px rgba(124,58,237,.15));">'
-            if _b64 else "🧡"
-        )
+    left_col, right_col = st.columns([1.05, 1])
+
+    # ── LEFT: branding panel ────────────────────────────────────────────────
+    with left_col:
         st.markdown(f"""
-        <div style="text-align:center;padding-top:1rem;">
-          <div>{logo_inner}</div>
-          <!-- Removing Title since the text is likely in the logo image itself, leaving subtitle -->
-          <div class="auth-subtitle">AI-Powered Heart Disease Risk Platform</div>
+        <div style="text-align:center; padding-top:1rem;">
+          {logo_html}
+          <div style="font-size:.9rem;font-weight:600;color:rgba(255,255,255,.78);
+                      letter-spacing:.03em;line-height:1.55;margin-bottom:2.2rem;">
+            AI-Powered Heart Disease<br>Risk Assessment Platform
+          </div>
+          <div style="display:flex;flex-direction:column;gap:.65rem;text-align:left;">
+            <div style="display:flex;align-items:center;gap:.75rem;background:rgba(255,255,255,.1);
+                        border-radius:12px;padding:.6rem 1rem;border:1px solid rgba(255,255,255,.14);
+                        font-size:.84rem;color:#DDD6FE;font-weight:500;">
+              🔒&nbsp; Passwordless OTP Login
+            </div>
+            <div style="display:flex;align-items:center;gap:.75rem;background:rgba(255,255,255,.1);
+                        border-radius:12px;padding:.6rem 1rem;border:1px solid rgba(255,255,255,.14);
+                        font-size:.84rem;color:#DDD6FE;font-weight:500;">
+              🤖&nbsp; 4 Specialized AI Agents
+            </div>
+            <div style="display:flex;align-items:center;gap:.75rem;background:rgba(255,255,255,.1);
+                        border-radius:12px;padding:.6rem 1rem;border:1px solid rgba(255,255,255,.14);
+                        font-size:.84rem;color:#DDD6FE;font-weight:500;">
+              📈&nbsp; Real-time Risk Monitoring
+            </div>
+            <div style="display:flex;align-items:center;gap:.75rem;background:rgba(255,255,255,.1);
+                        border-radius:12px;padding:.6rem 1rem;border:1px solid rgba(255,255,255,.14);
+                        font-size:.84rem;color:#DDD6FE;font-weight:500;">
+              📋&nbsp; PDF Report Generation
+            </div>
+          </div>
         </div>
         """, unsafe_allow_html=True)
 
+    # ── RIGHT: form panel ───────────────────────────────────────────────────
+    with right_col:
         if st.session_state.otp is None:
-            # ── Step 1: email entry ────────────────────────────────────────
+            # Step 1: email entry
             st.markdown('<div class="auth-step-pill">Step 1 of 2</div>', unsafe_allow_html=True)
             st.markdown('<div class="auth-heading">Sign In or Register</div>', unsafe_allow_html=True)
             st.markdown(
-                "<div class=\"auth-caption\">Enter your email and we'll send a secure "
-                "one-time code. No password required.</div>",
+                '<div class="auth-caption">Enter your email and we\'ll send a secure '
+                'one-time code. No password required.</div>',
                 unsafe_allow_html=True,
             )
-
-            email = st.text_input(
-                "Email address",
-                placeholder="you@example.com",
-                key="auth_email_input",
-            )
-            send_btn = st.button(
-                "📨  Send Secure Code",
-                use_container_width=True,
-                type="primary",
-            )
+            email = st.text_input("Email address", placeholder="you@example.com", key="auth_email_input")
+            send_btn = st.button("📨  Send Secure Code", use_container_width=True, type="primary")
             if send_btn:
                 email = email.strip().lower()
                 if "@" not in email or "." not in email:
@@ -1074,34 +1242,24 @@ def _auth_page():
                     else:
                         st.error("Failed to send code. Check SMTP settings.")
         else:
-            # ── Step 2: OTP verify ─────────────────────────────────────────
+            # Step 2: OTP verify
             st.markdown('<div class="auth-step-pill">Step 2 of 2</div>', unsafe_allow_html=True)
             st.markdown('<div class="auth-heading">Enter Your Code</div>', unsafe_allow_html=True)
             st.markdown(
-                f'<div class="auth-email-badge">'
-                f'📧  Code sent to <strong>{st.session_state.otp_email}</strong>'
-                f'</div>',
+                f'<div class="auth-email-badge">📧&nbsp; Code sent to '
+                f'<strong>{st.session_state.otp_email}</strong></div>',
                 unsafe_allow_html=True,
             )
-            entered = st.text_input(
-                "6-digit code",
-                max_chars=6,
-                placeholder="Enter 6-digit code",
-                key="auth_otp_input",
-            )
-            col1, col2 = st.columns([3, 2])
-            with col1:
-                verify_btn = st.button(
-                    "✓  Verify & Sign In",
-                    use_container_width=True,
-                    type="primary",
-                )
-            with col2:
+            entered = st.text_input("6-digit code", max_chars=6,
+                                    placeholder="Enter 6-digit code", key="auth_otp_input")
+            c1, c2 = st.columns([3, 2])
+            with c1:
+                verify_btn = st.button("✓  Verify & Sign In", use_container_width=True, type="primary")
+            with c2:
                 back_btn = st.button("← Back", use_container_width=True)
 
             if back_btn:
-                st.session_state.otp       = None
-                st.session_state.otp_email = None
+                st.session_state.otp = st.session_state.otp_email = None
                 st.rerun()
 
             now = datetime.datetime.utcnow()
@@ -1138,12 +1296,12 @@ def _auth_page():
         st.markdown('<hr class="auth-divider">', unsafe_allow_html=True)
         st.markdown("""
         <div class="auth-chips">
-          <span class="auth-chip">🔒 Passwordless Auth</span>
-          <span class="auth-chip">🤖 4 AI Agents</span>
+          <span class="auth-chip">🔒 Passwordless</span>
+          <span class="auth-chip">🤖 AI Agents</span>
           <span class="auth-chip">📈 Risk Tracking</span>
           <span class="auth-chip">📋 PDF Reports</span>
         </div>
-        <p style="text-align:center;font-size:.72rem;color:var(--text-muted);margin-top:1.1rem;opacity:0.7;">
+        <p style="font-size:.7rem;color:#9CA3AF;margin-top:.9rem;">
           For educational and research purposes only
         </p>
         """, unsafe_allow_html=True)
@@ -1991,18 +2149,22 @@ def _page_risk_analysis():
         )
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  PAGE: DATA AGENT  – Recent 5 Assessments + Comparison Graph
+#  PAGE: DATA AGENT  – Assessment History
 # ══════════════════════════════════════════════════════════════════════════════
 def _page_data_agent():
-    st.markdown('<h2 style="color:var(--text,#1a1f2e);font-weight:800;">🗃️ Data Agent — Assessment History</h2>', unsafe_allow_html=True)
+    st.markdown('<h2 style="color:#1a1f2e;font-weight:800;">🗃️ Data Agent — Assessment History</h2>', unsafe_allow_html=True)
     st.markdown(
-        "<p style='color:var(--text-muted,#6c757d);margin-bottom:1.5rem;'>"
+        "<p style='color:#6c757d;margin-bottom:1.5rem;'>"
         "View your 5 most recent assessments, compare key metrics side-by-side, "
         "and track how your numbers have changed over time."
         "</p>",
         unsafe_allow_html=True,
     )
+
+    uid = _user_id()
+    if not uid:
+        st.warning("Please log in to view your data.")
+        return
 
     user = st.session_state.user
     try:
@@ -2029,50 +2191,49 @@ def _page_data_agent():
 
     df = pd.DataFrame(records)
     df["created_at"] = pd.to_datetime(df["created_at"])
-    # Safely convert risk_score (may be None for old/unscored records)
-    df["risk_score"] = pd.to_numeric(df["risk_score"], errors="coerce").fillna(0.0) * 100
+    df["risk_score"]  = pd.to_numeric(df["risk_score"], errors="coerce").fillna(0.0) * 100
     df = df.sort_values("created_at").reset_index(drop=True)
     df["label"] = df["created_at"].dt.strftime("#%d %b %H:%M")
 
-    # ── Summary cards (newest first) ──────────────────────────────────────────
+    # ── Recent 5 assessment cards ─────────────────────────────────────────────
     st.markdown('<p class="section-title">📋 Recent 5 Assessments</p>', unsafe_allow_html=True)
+    color_map = {"HIGH": "#EF4444", "MEDIUM": "#F59E0B", "LOW": "#10B981"}
     for _, row in df.iloc[::-1].iterrows():
-        rl    = row.get("risk_label") or None
-        rl_display = rl if rl in ("HIGH", "MEDIUM", "LOW") else "Pending"
-        rs    = row.get("risk_score")  # already *100 in df
+        rl = row.get("risk_label") or "Pending"
+        if rl not in ("HIGH", "MEDIUM", "LOW"):
+            rl = "Pending"
         try:
-            rs_num = float(rs) if rs is not None else None
+            rs_num = float(row.get("risk_score") or 0)
         except (TypeError, ValueError):
-            rs_num = None
-        rs_display = f"{rs_num:.1f}%" if rs_num is not None and rs_num > 0 else "Pending"
+            rs_num = 0.0
+        rs_display = f"{rs_num:.1f}%" if rs_num > 0 else "Pending"
         ts    = row["created_at"].strftime("%d %b %Y  %H:%M")
-        color_map = {"HIGH": "#EF4444", "MEDIUM": "#F59E0B", "LOW": "#10B981"}
         color = color_map.get(rl, "#6B46C1")
         cls   = f"risk-card-{rl.lower()}" if rl in color_map else "hv-card"
-        bp    = row.get("trestbps") if row.get("trestbps") is not None else "–"
-        chol  = row.get("chol")     if row.get("chol")     is not None else "–"
-        hr    = row.get("thalach")  if row.get("thalach")  is not None else "–"
-        op    = row.get("oldpeak")  if row.get("oldpeak")  is not None else "–"
+        bp    = row.get("trestbps") or "–"
+        chol  = row.get("chol")     or "–"
+        hr    = row.get("thalach")  or "–"
+        op    = row.get("oldpeak")  or "–"
         st.markdown(f"""
         <div class="hv-card {cls}" style="margin-bottom:1rem;">
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem;">
             <div>
               <div style="font-size:.78rem;opacity:.7;">{ts}</div>
-              <div style="font-size:1.6rem;font-weight:900;color:{color};">{rl_display}</div>
+              <div style="font-size:1.6rem;font-weight:900;color:{color};">{rl}</div>
               <div style="font-size:.9rem;font-weight:600;">Risk Score: {rs_display}</div>
             </div>
             <div style="display:flex;gap:1.4rem;flex-wrap:wrap;">
               <div style="text-align:center;">
                 <div style="font-size:.72rem;opacity:.7;">BP</div>
-                <div style="font-weight:700;font-size:1rem;">{bp} <span style='font-size:.7rem;'>mmHg</span></div>
+                <div style="font-weight:700;font-size:1rem;">{bp} <span style="font-size:.7rem;">mmHg</span></div>
               </div>
               <div style="text-align:center;">
                 <div style="font-size:.72rem;opacity:.7;">Cholesterol</div>
-                <div style="font-weight:700;font-size:1rem;">{chol} <span style='font-size:.7rem;'>mg/dL</span></div>
+                <div style="font-weight:700;font-size:1rem;">{chol} <span style="font-size:.7rem;">mg/dL</span></div>
               </div>
               <div style="text-align:center;">
                 <div style="font-size:.72rem;opacity:.7;">Max HR</div>
-                <div style="font-weight:700;font-size:1rem;">{hr} <span style='font-size:.7rem;'>bpm</span></div>
+                <div style="font-weight:700;font-size:1rem;">{hr} <span style="font-size:.7rem;">bpm</span></div>
               </div>
               <div style="text-align:center;">
                 <div style="font-size:.72rem;opacity:.7;">ST Dep.</div>
@@ -2083,25 +2244,22 @@ def _page_data_agent():
         </div>
         """, unsafe_allow_html=True)
 
-    # ── PDF download for latest record ────────────────────────────────────────
-    latest = df.iloc[-1].to_dict()   # most recent (df sorted ascending)
+    # ── PDF download ──────────────────────────────────────────────────────────
+    latest = df.iloc[-1].to_dict()
     try:
-        rl = latest.get("risk_label")
-        if rl not in ("HIGH", "MEDIUM", "LOW"):
-            rl = "UNKNOWN"
-        rs_raw = latest.get("risk_score", 0) or 0   # already *100 in df
+        rl_pdf = latest.get("risk_label")
+        if rl_pdf not in ("HIGH", "MEDIUM", "LOW"):
+            rl_pdf = "UNKNOWN"
+        rs_raw = float(latest.get("risk_score", 0) or 0)
         dummy_risk = {
-            "risk_label":          rl,
-            "probability_percent": float(rs_raw),
+            "risk_label":          rl_pdf,
+            "probability_percent": rs_raw,
             "clinical_reasons":    ["Historical record — no live risk run"],
             "ai_explanation":      "This report is generated from a saved assessment record.",
         }
         pdf_bytes = _generate_pdf_report(
             st.session_state.user.get("email", ""),
-            latest,
-            dummy_risk,
-            {},
-            [],
+            latest, dummy_risk, {}, [],
         )
         if pdf_bytes:
             st.download_button(
@@ -2114,107 +2272,71 @@ def _page_data_agent():
     except Exception as _pdf_exc:
         logger.warning("PDF generation skipped in data agent: %s", _pdf_exc)
 
-    # ── Comparison chart ───────────────────────────────────────────────────────
+    # ── Metric comparison charts ──────────────────────────────────────────────
     st.markdown('<p class="section-title">📊 Metric Comparison Across Assessments</p>', unsafe_allow_html=True)
-
     compare_metrics = [
-        ("risk_score",  "Risk Score (%)",      "#6B46C1"),
-        ("trestbps",    "Resting BP (mmHg)",   "#EF4444"),
-        ("chol",        "Cholesterol (mg/dL)", "#F59E0B"),
-        ("thalach",     "Max HR (bpm)",        "#10B981"),
-        ("oldpeak",     "ST Depression (mm)",  "#3B82F6"),
+        ("risk_score", "Risk Score (%)",      "#6B46C1"),
+        ("trestbps",   "Resting BP (mmHg)",   "#EF4444"),
+        ("chol",       "Cholesterol (mg/dL)", "#F59E0B"),
+        ("thalach",    "Max HR (bpm)",        "#10B981"),
+        ("oldpeak",    "ST Depression (mm)",  "#3B82F6"),
     ]
-
-    tab_labels = [lbl for _, lbl, _ in compare_metrics]
-    tabs = st.tabs(tab_labels)
-
     safe_ranges_chart = {
-        "risk_score": (0,   40),
-        "trestbps":   (90,  120),
-        "chol":       (0,   200),
-        "thalach":    (60,  100),
-        "oldpeak":    (0,   1.0),
+        "risk_score": (0,  40),
+        "trestbps":   (90, 120),
+        "chol":       (0,  200),
+        "thalach":    (60, 100),
+        "oldpeak":    (0,  1.0),
     }
-
+    tabs = st.tabs([lbl for _, lbl, _ in compare_metrics])
     for tab, (metric, label, color) in zip(tabs, compare_metrics):
         with tab:
             if metric not in df.columns:
                 st.info(f"No data for {label}.")
                 continue
-            # Drop NaN rows for this metric before plotting
             valid_mask = df[metric].notna()
-            xs   = [x for x, v in zip(df["label"].tolist(), valid_mask) if v]
-            ys_raw = df.loc[valid_mask, metric].tolist()
-            ys   = [float(v) for v in ys_raw]
+            xs  = [x for x, v in zip(df["label"].tolist(), valid_mask) if v]
+            ys  = [float(v) for v in df.loc[valid_mask, metric].tolist()]
             lo, hi = safe_ranges_chart.get(metric, (None, None))
-
             if not ys:
                 st.info(f"No data for {label} in any assessment.")
                 continue
-
+            bar_colors = [color if (lo is None or hi is None or lo <= y <= hi) else "#EF4444" for y in ys]
             fig = go.Figure()
-            bar_colors = []
-            for y in ys:
-                if lo is not None and hi is not None:
-                    bar_colors.append(color if lo <= y <= hi else "#EF4444")
-                else:
-                    bar_colors.append(color)
-
-            fig.add_trace(go.Bar(
-                x=xs, y=ys,
-                name=label,
-                marker_color=bar_colors,
-                text=[f"{v:.1f}" for v in ys],
-                textposition="outside",
-            ))
+            fig.add_trace(go.Bar(x=xs, y=ys, name=label, marker_color=bar_colors,
+                                 text=[f"{v:.1f}" for v in ys], textposition="outside"))
             if lo is not None and hi is not None and xs:
-                fig.add_hrect(
-                    y0=lo, y1=hi,
-                    fillcolor="rgba(16,185,129,0.10)",
-                    line_width=0,
-                    annotation_text=f"Safe: {lo}–{hi}",
-                    annotation_position="top right",
-                    annotation_font_color="#10B981",
-                )
+                fig.add_hrect(y0=lo, y1=hi, fillcolor="rgba(16,185,129,0.10)", line_width=0,
+                              annotation_text=f"Safe: {lo}–{hi}", annotation_position="top right",
+                              annotation_font_color="#10B981")
                 fig.add_hline(y=hi, line_dash="dot", line_color="#10B981", line_width=1.5)
             if len(ys) >= 2:
-                fig.add_trace(go.Scatter(
-                    x=xs, y=ys,
-                    mode="lines+markers",
-                    name="Trend",
-                    line={"color": "rgba(107,70,193,0.6)", "width": 2, "dash": "dot"},
-                    marker={"size": 8, "color": color},
-                ))
-            fig.update_layout(
-                height=340,
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="#FAFAFA",
-                margin={"t": 30, "b": 40, "l": 30, "r": 20},
-                font={"family": "Inter", "size": 12},
-                legend={"orientation": "h", "y": -0.25},
-                yaxis_title=label,
-            )
+                fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines+markers", name="Trend",
+                                          line={"color": "rgba(107,70,193,0.6)", "width": 2, "dash": "dot"},
+                                          marker={"size": 8, "color": color}))
+            fig.update_layout(height=340, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#FAFAFA",
+                              margin={"t": 30, "b": 40, "l": 30, "r": 20},
+                              font={"family": "Inter", "size": 12},
+                              legend={"orientation": "h", "y": -0.25}, yaxis_title=label)
             st.plotly_chart(fig, use_container_width=True)
 
-    # ── Raw table ──────────────────────────────────────────────────────────────
-    with st.expander("📋 Raw Data Table", expanded=False):
+    # ── Raw data table ────────────────────────────────────────────────────────
+    with st.expander("📋 Assessment History Table", expanded=False):
         disp_cols = ["created_at", "risk_label", "risk_score", "trestbps", "chol", "thalach", "oldpeak", "ca", "exang"]
-        avail = [c for c in disp_cols if c in df.columns]
-        df_disp = df[avail].copy()
-        df_disp["created_at"] = df_disp["created_at"].dt.strftime("%Y-%m-%d %H:%M")
-        df_disp["risk_label"]  = df_disp["risk_label"].apply(
+        avail     = [c for c in disp_cols if c in df.columns]
+        df_disp   = df[avail].copy()
+        df_disp["created_at"] = df_disp["created_at"].dt.strftime("%b %d, %Y  %H:%M")
+        df_disp["risk_label"] = df_disp["risk_label"].apply(
             lambda x: x if x in ("HIGH", "MEDIUM", "LOW") else "Pending"
         )
-        df_disp["risk_score"]  = df_disp["risk_score"].apply(
+        df_disp["risk_score"] = df_disp["risk_score"].apply(
             lambda x: f"{float(x):.1f}%" if (x is not None and str(x) != "nan" and float(x) > 0) else "Pending"
         )
         df_disp.columns = [c.replace("_", " ").title() for c in df_disp.columns]
-        st.dataframe(df_disp, use_container_width=True)
+        _render_styled_table(df_disp, title="Assessment Records", subtitle=f"{len(df_disp)} entries")
 
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  PAGE: MONITORING  – Trend Charts + Date Range Filter
 # ══════════════════════════════════════════════════════════════════════════════
 # ══════════════════════════════════════════════════════════════════════════════
 #  PAGE: MONITORING  ─  Premium Health Dashboard
@@ -2578,18 +2700,22 @@ def _page_monitoring():
     except Exception as ce:
         st.warning(f"Some trend charts could not render: {ce}")
 
-    # ─── Stats summary table ───────────────────────────────────────────────────
-    st.markdown('<p class="section-title">\U0001f4cb Assessment Records</p>', unsafe_allow_html=True)
+    # ─── Assessment Records table ────────────────────────────────────────────
+    st.markdown('<p class="section-title">📋 Assessment Records</p>', unsafe_allow_html=True)
     cols_show = ["created_at", "risk_label", "risk_score", "trestbps", "chol", "thalach", "oldpeak", "ca"]
     avail     = [c for c in cols_show if c in df.columns]
     df_show   = df[avail].copy().sort_values("created_at", ascending=False)
-    df_show["created_at"]  = df_show["created_at"].dt.strftime("%Y-%m-%d %H:%M")
-    df_show["risk_label"]  = df_show["risk_label"].apply(lambda x: x if x in ("HIGH","MEDIUM","LOW") else "Pending")
-    df_show["risk_score"]  = df_show["risk_score"].apply(
+    df_show["created_at"] = df_show["created_at"].dt.strftime("%b %d, %Y  %H:%M")
+    df_show["risk_label"] = df_show["risk_label"].apply(lambda x: x if x in ("HIGH","MEDIUM","LOW") else "Pending")
+    df_show["risk_score"] = df_show["risk_score"].apply(
         lambda x: f"{float(x):.1f}%" if (x is not None and str(x) != "nan" and float(x) > 0) else "Pending"
     )
     df_show.columns = [c.replace("_"," ").title() for c in df_show.columns]
-    st.dataframe(df_show.reset_index(drop=True), use_container_width=True)
+    _render_styled_table(
+        df_show.reset_index(drop=True),
+        title="Full Assessment History",
+        subtitle=f"{len(df_show)} records • newest first",
+    )
 
     # ─── CSV download ──────────────────────────────────────────────────────────
     csv_buf = df.drop(columns=["id","user_id"], errors="ignore").to_csv(index=False).encode("utf-8")

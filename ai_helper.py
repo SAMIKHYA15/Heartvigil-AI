@@ -115,3 +115,78 @@ def get_ai_response(prompt: str, system: str = "") -> str:
         fallback="AI response unavailable. Please try again later.",
         max_tokens=512,
     )
+
+
+def analyse_data_history(records: list) -> dict:
+    """
+    AI Health Analyst: reads the user's assessment history and returns
+    structured insights as a dict with keys:
+      - trend_summary   : 2-3 sentence plain-English narrative
+      - pattern_insights: list of 2-3 key pattern observations
+      - predictive_warn : single sentence about future risk if trend continues
+      - top_priorities  : list of 3 actionable focus areas
+
+    Falls back gracefully if Groq is unavailable.
+    """
+    if not records:
+        return {}
+
+    # Build a compact text representation of the records
+    lines = []
+    for i, r in enumerate(records, 1):
+        rs = r.get("risk_score")
+        try:
+            rs_pct = f"{float(rs)*100:.1f}%" if rs is not None else "N/A"
+        except Exception:
+            rs_pct = "N/A"
+        lines.append(
+            f"Assessment {i} ({r.get('created_at','')[:10]}): "
+            f"Risk={r.get('risk_label','N/A')} ({rs_pct}), "
+            f"BP={r.get('trestbps','N/A')}mmHg, "
+            f"Chol={r.get('chol','N/A')}mg/dL, "
+            f"MaxHR={r.get('thalach','N/A')}bpm, "
+            f"ST-Depression={r.get('oldpeak','N/A')}mm, "
+            f"ChestPain={r.get('cp','N/A')}, "
+            f"FastingBS={r.get('fbs','N/A')}"
+        )
+    history_text = "\n".join(lines)
+
+    system_prompt = """You are an expert AI cardiologist analyst. 
+You are given a patient's heart health assessment history (oldest to newest).
+Respond ONLY with a valid JSON object with exactly these 4 keys:
+{
+  "trend_summary": "2-3 sentence plain-English narrative of overall trend",
+  "pattern_insights": ["insight 1", "insight 2", "insight 3"],
+  "predictive_warn": "one sentence warning about future risk if current trend continues",
+  "top_priorities": ["priority 1", "priority 2", "priority 3"]
+}
+Rules:
+- Be empathetic and non-alarmist
+- No diagnosis or prescriptions
+- Use plain language a patient can understand
+- If only 1 record exists, focus on current status instead of trends
+- Keep each string under 120 characters"""
+
+    user_prompt = f"Patient assessment history (oldest → newest):\n{history_text}"
+
+    raw = call_groq(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        fallback="",
+        max_tokens=600,
+        temperature=0.25,
+    )
+
+    if not raw:
+        return {}
+
+    # Parse JSON safely
+    import json, re
+    try:
+        # Extract JSON block even if surrounded by markdown fences
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        if m:
+            return json.loads(m.group(0))
+    except Exception:
+        pass
+    return {}
