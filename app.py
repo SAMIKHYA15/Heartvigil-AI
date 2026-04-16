@@ -193,74 +193,8 @@ def _inject_css():
             --radius-sm:     10px;
         }
 
-        /* ════════════════════════════════════════════════════════
-           DARK MODE TOKENS  (Streamlit sets data-theme="dark")
-        ════════════════════════════════════════════════════════ */
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --primary:       #A78BFA;
-                --primary-d:     #7C3AED;
-                --primary-l:     #C4B5FD;
-                --primary-glow:  rgba(167,139,250,.20);
-                --accent:        #F472B6;
-                --accent-l:      #FBCFE8;
+        /* Light mode only — dark mode removed */
 
-                --low:           #34D399;
-                --low-bg:        #064E3B;
-                --low-text:      #A7F3D0;
-                --medium:        #FBBF24;
-                --medium-bg:     #451A03;
-                --medium-text:   #FDE68A;
-                --high:          #F87171;
-                --high-bg:       #450A0A;
-                --high-text:     #FCA5A5;
-
-                --bg:            #0F0B1A;
-                --bg2:           #16102B;
-                --surface:       #1C1533;
-                --surface2:      #231B40;
-                --surface3:      #2D2250;
-                --text:          #F3F0FF;
-                --text-2:        #DDD6FE;
-                --text-muted:    #9CA3AF;
-                --border:        #3D3166;
-                --border-2:      #2D2550;
-                --shadow:        0 4px 24px rgba(0,0,0,.40);
-                --shadow-lg:     0 12px 48px rgba(0,0,0,.60);
-            }
-        }
-        
-        [data-theme="dark"] {
-            --primary:       #A78BFA;
-            --primary-d:     #7C3AED;
-            --primary-l:     #C4B5FD;
-            --primary-glow:  rgba(167,139,250,.20);
-            --accent:        #F472B6;
-            --accent-l:      #FBCFE8;
-
-            --low:           #34D399;
-            --low-bg:        #064E3B;
-            --low-text:      #A7F3D0;
-            --medium:        #FBBF24;
-            --medium-bg:     #451A03;
-            --medium-text:   #FDE68A;
-            --high:          #F87171;
-            --high-bg:       #450A0A;
-            --high-text:     #FCA5A5;
-
-            --bg:            #0F0B1A;
-            --bg2:           #16102B;
-            --surface:       #1C1533;
-            --surface2:      #231B40;
-            --surface3:      #2D2250;
-            --text:          #F3F0FF;
-            --text-2:        #DDD6FE;
-            --text-muted:    #9CA3AF;
-            --border:        #3D3166;
-            --border-2:      #2D2550;
-            --shadow:        0 4px 24px rgba(0,0,0,.40);
-            --shadow-lg:     0 12px 48px rgba(0,0,0,.60);
-        }
 
         /* ════════════════════════════════════════════════════════
            BASE / LAYOUT
@@ -841,6 +775,11 @@ def send_otp_email(to_email: str, otp: str) -> bool:
 @st.cache_resource(show_spinner=False)
 def _supabase():
     return get_supabase()
+
+
+def _supabase_admin():
+    """Service-role client — bypasses RLS for all server-side writes."""
+    return get_admin_supabase()
 
 
 def _get_or_create_user(email: str) -> Optional[Dict]:
@@ -1801,20 +1740,23 @@ def _page_assessment():
             st.stop()
 
         # ── Phase 2 Agent Pipeline ─────────────────────────────────────────────────
-        # Step 1: Fetch previous record for delta (do NOT save yet)
+        uid = st.session_state.user.get("id")
+
+        # Step 1: Fetch previous record for delta
         from data_agent import _fetch_latest_record
         previous_record = None
         delta           = {}
-        try:
-            previous_record = _fetch_latest_record(_supabase(), st.session_state.user["id"])
-            if previous_record:
-                from data_agent import compute_delta
-                delta = compute_delta(health_data, previous_record)
-        except Exception as exc:
-            logger.warning("Could not fetch previous record: %s", exc)
+        if uid:
+            try:
+                previous_record = _fetch_latest_record(_supabase_admin(), uid)
+                if previous_record:
+                    from data_agent import compute_delta
+                    delta = compute_delta(health_data, previous_record)
+            except Exception as exc:
+                logger.warning("Could not fetch previous record: %s", exc)
 
-        # Step 2: Risk Agent – uses real previous record for direction
-        with st.spinner("🔬 Running risk analysis…"):
+        # Step 2: Risk Agent
+        with st.spinner("Analysing risk\u2026"):
             risk_output = run_risk_agent(
                 health_data,
                 use_groq=st.session_state.use_groq,
@@ -1822,52 +1764,57 @@ def _page_assessment():
                 delta=delta,
             )
 
-        # Step 3: Save to Supabase with REAL risk score (one-shot, no placeholder)
+        # Step 3: Save to Supabase using ADMIN client (bypasses RLS)
         _save_ok = False
-        try:
-            with st.spinner("Saving your assessment\u2026"):
-                data_result = run_data_agent(
-                    _supabase(),
-                    st.session_state.user["id"],
-                    health_data,
-                    risk_score=risk_output["risk_score"],
-                    risk_label=risk_output["risk_label"],
-                    source="manual",
-                )
-            if data_result["success"]:
-                _save_ok = True
-            else:
-                errs = data_result.get("errors") or []
-                msg  = data_result.get("message", "Unknown error")
-                if errs:
-                    st.error(
-                        "\u26a0\ufe0f **Could not save assessment.** Validation errors:\n\n" +
-                        "\n".join(f"\u2022 {e}" for e in errs)
+        if uid is None:
+            st.info("\u26a0 Not saved \u2014 add SUPABASE_SERVICE_KEY to .env and log out/in again.")
+        else:
+            try:
+                with st.spinner("Saving assessment\u2026"):
+                    data_result = run_data_agent(
+                        _supabase_admin(),   # <-- admin client bypasses RLS
+                        uid,
+                        health_data,
+                        risk_score=risk_output["risk_score"],
+                        risk_label=risk_output["risk_label"],
+                        source="manual",
                     )
+                if data_result["success"]:
+                    _save_ok = True
                 else:
-                    st.error(f"\u26a0\ufe0f **Database save failed:** {msg}")
-        except Exception as exc:
-            import traceback
-            st.error(
-                f"\u26a0\ufe0f **Database save exception:** {exc}\n\n"
-                f"```\n{traceback.format_exc()}\n```"
-            )
-            logger.error("Data agent save exception: %s", exc)
+                    errs = data_result.get("errors") or []
+                    msg  = data_result.get("message", "Unknown error")
+                    if errs:
+                        st.error(
+                            "\u26a0 **Could not save.** Errors:\n\n" +
+                            "\n".join(f"\u2022 {e}" for e in errs)
+                        )
+                    else:
+                        st.error(f"\u26a0 **Database save failed:** {msg}")
+            except Exception as exc:
+                import traceback
+                st.error(
+                    f"\u26a0 **Save exception:** {exc}\n\n"
+                    f"```\n{traceback.format_exc()}\n```"
+                )
+                logger.error("Data agent save exception: %s", exc)
 
         st.session_state.risk_output = risk_output
         st.session_state.health_data = health_data
 
-        # Step 4: Monitor Agent – build progress summary for reco agent
+        # Step 4: Monitor Agent – progress summary for reco agent
         progress_summary = ""
-        try:
-            from monitor_agent import fetch_history, compute_trends, detect_alerts, build_progress_summary
-            hist_df = fetch_history(_supabase(), st.session_state.user["id"], limit=10)
-            if not hist_df.empty:
-                hist_trends = compute_trends(hist_df)
-                hist_alerts = detect_alerts(hist_trends)
-                progress_summary = build_progress_summary(hist_df, hist_trends, hist_alerts)
-        except Exception as exc:
-            logger.warning("Could not build progress summary: %s", exc)
+        if uid and _save_ok:
+            try:
+                from monitor_agent import fetch_history, compute_trends, detect_alerts, build_progress_summary
+                hist_df = fetch_history(_supabase_admin(), uid, limit=10)
+                if not hist_df.empty:
+                    hist_trends = compute_trends(hist_df)
+                    hist_alerts = detect_alerts(hist_trends)
+                    progress_summary = build_progress_summary(hist_df, hist_trends, hist_alerts)
+            except Exception as exc:
+                logger.warning("Could not build progress summary: %s", exc)
+
 
         # Step 5: Recommendation Agent – personalised with actual values + progress
         with st.spinner("💡 Generating personalised recommendations…"):

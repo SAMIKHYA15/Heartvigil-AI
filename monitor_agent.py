@@ -159,7 +159,7 @@ def _field_progress(metric: str, pct_change: Optional[float]) -> Dict[str, str]:
     if abs(pct_change) < 3:
         return {
             "status":      "stable",
-            "icon":        "➡️",
+            "icon":        "➡",
             "color":       "#F59E0B",
             "description": f"Stable ({pct_change:+.1f}%)",
         }
@@ -169,14 +169,14 @@ def _field_progress(metric: str, pct_change: Optional[float]) -> Dict[str, str]:
     if is_worsening:
         return {
             "status":      "worsened",
-            "icon":        "⬆️" if pct_change > 0 else "⬇️",
+            "icon":        "▲" if pct_change > 0 else "▼",
             "color":       "#EF4444",
             "description": f"Worsened ({pct_change:+.1f}%)",
         }
     else:
         return {
             "status":      "improved",
-            "icon":        "⬇️" if pct_change > 0 else "⬆️",
+            "icon":        "▼" if pct_change > 0 else "▲",
             "color":       "#10B981",
             "description": f"Improved ({pct_change:+.1f}%)",
         }

@@ -56,12 +56,12 @@ _RULE_TIPS: Dict[str, List[str]] = {
         "🩺 **Schedule a GP check-up** within the next 4–6 weeks to review your cardiovascular risk factors in detail.",
         "🏃 **Exercise target:** Aim for 150 minutes of moderate aerobic activity per week — brisk walking, cycling, or swimming.",
         "🥦 **Nutrition upgrade:** Increase fibre (30 g/day) and omega-3 intake via leafy greens, salmon, walnuts, and flaxseed.",
-        "⚖️ **Weight management:** Even a 5–10% body weight reduction can significantly lower blood pressure and cholesterol.",
+        "⚖ **Weight management:** Even a 5–10% body weight reduction can significantly lower blood pressure and cholesterol.",
         "🚭 **Smoking cessation:** If you smoke, seek cessation support — quitting is the single most impactful lifestyle change available.",
     ],
     "LOW": [
         "✅ **Excellent risk profile!** Your current metrics are well-controlled — maintain your healthy lifestyle to preserve this.",
-        "🏋️ **Stay active:** Continue 150+ min/week of moderate activity or 75 min/week of vigorous aerobic exercise.",
+        "🏋 **Stay active:** Continue 150+ min/week of moderate activity or 75 min/week of vigorous aerobic exercise.",
         "🥗 **Diet maintenance:** Keep eating a balanced diet rich in whole grains, fruits, vegetables, lean proteins, and healthy fats.",
         "😴 **Sleep hygiene:** Prioritise 7–9 hours of quality sleep each night; chronic sleep deprivation raises cardiovascular risk.",
         "📅 **Annual screening:** Maintain yearly health check-ups to monitor cholesterol, BP, and blood glucose proactively.",
@@ -81,11 +81,11 @@ def _build_metric_context(health_data: Dict[str, Any]) -> str:
             continue
         v = float(val)
         if hi == 0:
-            status = "⚠️ ABNORMAL" if v > 0 else "✅ Normal"
+            status = "⚠ ABNORMAL" if v > 0 else "✅ Normal"
         elif v < lo:
-            status = "⚠️ Below normal range"
+            status = "⚠ Below normal range"
         elif v > hi:
-            status = f"⚠️ Elevated (safe: {lo}–{hi} {unit})"
+            status = f"⚠ Elevated (safe: {lo}–{hi} {unit})"
         else:
             status = f"✅ Within safe range ({lo}–{hi} {unit})"
         unit_str = f" {unit}" if unit else ""
@@ -283,7 +283,7 @@ def run_reco_agent(
     tips = tips[:5]
 
     disclaimer = (
-        "⚠️ **Disclaimer:** These recommendations are AI-generated for "
+        "⚠ **Disclaimer:** These recommendations are AI-generated for "
         "educational purposes only and do not constitute medical advice. "
         "Always consult a qualified healthcare professional before making "
         "changes to your health routine."

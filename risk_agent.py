@@ -97,6 +97,22 @@ CLINICAL_RULES: List[Dict[str, Any]] = [
         "condition": lambda d: int(d.get("slope", 2)) == 0,
         "reason":    "Downsloping ST segment (slope=0) during exercise is associated with ischaemia.",
     },
+    {
+        "condition": lambda d: int(d.get("cp", 3)) == 0,
+        "reason":    "Typical angina detected—classic exertional chest pain is a strong cardiac indicator.",
+    },
+    {
+        "condition": lambda d: int(d.get("exang", 0)) == 1,
+        "reason":    "Exercise-induced angina detected—ischemic symptoms triggered by physical stress.",
+    },
+    {
+        "condition": lambda d: int(d.get("ca", 0)) >= 1,
+        "reason":    "Significant coronary artery obstruction detected via fluoroscopy (major vessels > 0).",
+    },
+    {
+        "condition": lambda d: int(d.get("thal", 1)) >= 2,
+        "reason":    "Thalassemia test shows perfusion defect—indicates impaired blood flow to heart muscle.",
+    },
 ]
 
 
@@ -147,7 +163,7 @@ def _apply_clinical_rules(
             "The model prediction is based on your complete clinical pattern."
         )
 
-    return round(base_prob, 4), reasons
+    return float(round(base_prob, 2)), reasons
 
 
 # ── Risk label ─────────────────────────────────────────────────────────────────
@@ -383,7 +399,7 @@ def doctor_ai_agent(
     raw_prob = float(model.predict_proba(feat_scaled)[0][1])
     adj_prob, reasons = _apply_clinical_rules(raw_prob, health_data)
     label         = _label(adj_prob)
-    pct           = round(adj_prob * 100, 1)
+    pct           = float(round(adj_prob * 100))
 
     dir_info = _compute_direction(adj_prob, previous_record, delta)
 
