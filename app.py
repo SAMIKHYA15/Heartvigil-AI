@@ -1166,18 +1166,16 @@ def _sidebar():
             st.markdown(f"""
             <div style="text-align:center;padding:1rem 0 1.2rem;">
               <img src="data:image/png;base64,{_b64}"
-                   style="width:80px;height:80px;object-fit:contain;
+                   style="width:190px;height:190px;object-fit:contain;
                           filter:drop-shadow(0 0 12px rgba(167,139,250,.6));">
-              <div style="font-size:1.1rem;font-weight:800;color:#e9d8fd;margin-top:.4rem;">HeartVigil AI</div>
-              <div style="font-size:.72rem;color:#c4b5fd;margin-top:.15rem;">Heart Health Monitor</div>
+              <div style="font-size:1.4rem;font-weight:900;color:#e9d8fd;margin-top:.5rem;">Heart Health Monitor</div>
             </div>
             """, unsafe_allow_html=True)
         else:
             st.markdown("""
             <div style="text-align:center;padding:1rem 0 1.5rem;">
               <div style="font-size:3rem;line-height:1;">❤️</div>
-              <div style="font-size:1.1rem;font-weight:800;color:#e9d8fd;margin-top:.5rem;">HeartVigil AI</div>
-              <div style="font-size:.72rem;color:#c4b5fd;margin-top:.15rem;">Heart Health Monitor</div>
+              <div style="font-size:1.4rem;font-weight:900;color:#e9d8fd;margin-top:.5rem;">Heart Health Monitor</div>
             </div>
             """, unsafe_allow_html=True)
 
