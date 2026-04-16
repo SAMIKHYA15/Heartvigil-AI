@@ -119,11 +119,13 @@ def _ai_recommendations(
         "Generate exactly 5 numbered, personalised health recommendations. "
         "IMPORTANT: Each recommendation MUST reference the patient's actual measured value "
         "and explain WHY that value is concerning or positive. "
-        "Be specific, actionable, and empathetic. Use emoji prefixes. "
+        "Crucially, you must provide HIGHLY SPECIFIC, actionable lifestyle advice: tell the user exactly what specific foods to eat, "
+        "what beverages to drink, what exact ingredients to avoid, and what specific types of exercises they should do to improve that exact metric. "
+        "Be highly specific, actionable, and empathetic. Use emoji prefixes. "
         "Do not diagnose, prescribe medications, or give specific drug names. "
         "Format each tip on its own line as: '1. [emoji] Recommendation text'\n"
         "Example of good format: '1. 🩺 Your resting blood pressure of 145 mmHg is above the safe range "
-        "of 90–120 mmHg. Reduce sodium intake to under 2,300 mg/day and consider daily 30-minute walks.'"
+        "of 90–120 mmHg. To lower this naturally, limit sodium to under 2,000 mg/day, drink hibiscus tea or beet juice, snack on potassium-rich bananas, and aim for 30 minutes of brisk walking daily.'"
     )
 
     user = (
@@ -198,19 +200,30 @@ def _rule_based_tips(
     if bp and float(bp) > 120:
         specific.append(
             f"🩺 **Blood pressure:** Your resting BP is **{bp} mmHg** (safe: 90–120 mmHg). "
-            "Target reducing it through a low-sodium diet (< 2,300 mg/day) and regular aerobic exercise."
+            "To lower this naturally, strictly limit sodium to < 2,000 mg/day, drink hibiscus tea, eat potassium-rich foods like bananas and spinach, and walk briskly for 30 minutes daily."
         )
     chol = health_data.get("chol")
     if chol and float(chol) > 200:
         specific.append(
             f"🔬 **Cholesterol:** Your cholesterol is **{chol} mg/dL** (desirable: < 200 mg/dL). "
-            "Reduce saturated fat intake and increase soluble fibre (oats, beans, flaxseed)."
+            "Lower it by eating a bowl of oatmeal for breakfast, snacking on raw almonds, drinking green tea, and swapping red meat for baked salmon twice a week."
         )
     hr = health_data.get("thalach")
     if hr and float(hr) < 100:
         specific.append(
-            f"💓 **Max heart rate:** Achieved only **{hr} bpm** during exercise, which may indicate "
-            "reduced cardiac reserve. Gradual aerobic conditioning under medical supervision is advised."
+            f"💓 **Max heart rate:** Achieved only **{hr} bpm** during exercise. "
+            "Stay hydrated with water and electrolytes, and slowly build your cardiac endurance with light jogging, swimming, or cycling 3 times a week."
+        )
+    elif hr and float(hr) > 160:
+        specific.append(
+            f"💓 **Max heart rate:** Your heart rate reached **{hr} bpm**, showing high cardiac effort. "
+            "Ensure you are drinking enough water before and during exercise, and incorporate cooling-down stretches and deep-breathing exercises to manage cardiovascular stress."
+        )
+    fbs = health_data.get("fbs")
+    if fbs and int(fbs) == 1:
+        specific.append(
+            f"🩸 **Fasting Blood Sugar:** Your blood sugar is elevated (>120 mg/dL). "
+            "Avoid sugary drinks and refined carbs completely. Drink water with freshly squeezed lemon, eat high-fibre foods like lentils, and take a 15-minute walk immediately after meals to improve your insulin sensitivity."
         )
 
     # Merge: keep first (5 - len(specific)) base tips + specific tips

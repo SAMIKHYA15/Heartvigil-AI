@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import os
 import io
+import time
+
+# Trigger frontend reload for specific recommendation system updateo
 import random
 import string
 import logging
@@ -2491,76 +2494,7 @@ def _page_monitoring():
         )
         st.plotly_chart(rs_fig, use_container_width=True)
 
-    # ─── Radar (Spider) Chart ─────────────────────────────────────────────────
-    st.markdown('<p class="section-title">\U0001f578\ufe0f Metrics vs Safe Ranges</p>', unsafe_allow_html=True)
-    radar_metrics = [
-        ("trestbps","BP",       120, 200),
-        ("chol",    "Chol",     200, 400),
-        ("thalach", "Max HR",   100,  60),   # inverted: lower = worse
-        ("oldpeak", "ST Dep",   0,     6),
-        ("ca",      "Vessels",  0,     4),
-        ("risk_score","Risk",   35,  100),
-    ]
-    radar_vals = []; radar_lbls = []; radar_ref = []
-    for metric, lbl, safe_hi, max_val in radar_metrics:
-        v = latest.get(metric)
-        if v is None: continue
-        radar_vals.append(min(100, round(float(v) / max_val * 100, 1)))
-        radar_ref.append(round(safe_hi / max_val * 100, 1))
-        radar_lbls.append(lbl)
 
-    if len(radar_vals) >= 3:
-        radar_vals_closed = radar_vals + [radar_vals[0]]
-        radar_ref_closed  = radar_ref  + [radar_ref[0]]
-        radar_lbls_closed = radar_lbls + [radar_lbls[0]]
-
-        r_fig = go.Figure()
-        r_fig.add_trace(go.Scatterpolar(
-            r=radar_ref_closed, theta=radar_lbls_closed,
-            fill="toself", name="Safe Zone",
-            line={"color": "#10B981", "dash": "dot", "width": 1.5},
-            fillcolor="rgba(16,185,129,.08)",
-        ))
-        r_fig.add_trace(go.Scatterpolar(
-            r=radar_vals_closed, theta=radar_lbls_closed,
-            fill="toself", name="Your Metrics",
-            line={"color": "#7C3AED", "width": 2.5},
-            fillcolor="rgba(124,58,237,.15)",
-            marker={"size": 8, "color": "#7C3AED"},
-        ))
-        r_fig.update_layout(
-            polar={"radialaxis": {"visible": True, "range": [0, 110],
-                                  "tickfont": {"size": 9, "family": "Inter"}},
-                   "angularaxis": {"tickfont": {"size": 11, "family": "Inter", "color": "#374151"}}},
-            showlegend=True, height=340,
-            paper_bgcolor="rgba(0,0,0,0)", margin={"t": 30, "b": 30, "l": 30, "r": 30},
-            legend={"font": {"family": "Inter", "size": 10}},
-        )
-        rc1, rc2 = st.columns([1, 1])
-        with rc1:
-            st.plotly_chart(r_fig, use_container_width=True)
-        with rc2:
-            # Sparkline mini-charts for BP and Cholesterol side by side
-            for metric, label, color in [("trestbps","Resting BP","#EF4444"),("chol","Cholesterol","#F59E0B")]:
-                if metric in df.columns and not df[metric].dropna().empty:
-                    s_vals  = df[metric].dropna().tolist()
-                    s_dates = df["created_at"].dropna().dt.strftime("%b %d").tolist()[-len(s_vals):]
-                    sp_fig  = go.Figure(go.Scatter(
-                        x=s_dates, y=s_vals, mode="lines+markers",
-                        line={"color": color, "width": 2},
-                        marker={"size": 6, "color": color},
-                        fill="tozeroy", fillcolor="rgba(" + ",".join(str(int(color.lstrip("#")[i*2:i*2+2],16)) for i in range(3)) + ",0.09)",
-                        hovertemplate=f"<b>%{{x}}</b><br>{label}: %{{y}}<extra></extra>",
-                    ))
-                    sp_fig.update_layout(
-                        title={"text": label, "font": {"size": 12, "family": "Inter", "color": "#374151"}},
-                        height=150, margin={"t": 30, "b": 20, "l": 30, "r": 10},
-                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(248,249,251,1)",
-                        xaxis={"showgrid": False, "tickfont": {"size": 9}},
-                        yaxis={"gridcolor": "#f0f0f0", "tickfont": {"size": 9}},
-                        showlegend=False,
-                    )
-                    st.plotly_chart(sp_fig, use_container_width=True)
 
     # ─── Per-metric progress cards ─────────────────────────────────────────────
     field_progress = monitor_out.get("field_progress", [])
@@ -2606,34 +2540,41 @@ def _page_monitoring():
                     d_vals  = df[metric].ffill().tolist()
                     d_dates = df["created_at"].dt.strftime("%b %d").tolist()
                     n       = len(d_vals)
-                    roll    = pd.Series(d_vals).rolling(max(1,min(3,n)), min_periods=1).mean().tolist()
+                    x_labels = [f"Test {idx+1}" for idx in range(n-1)] + ["Latest"] if n > 1 else ["Latest Test"]
 
                     fig = go.Figure()
                     fig.add_hrect(y0=safe_lo, y1=safe_hi,
-                                  fillcolor="rgba(16,185,129,.08)", line_width=0,
-                                  annotation_text=f"Safe {safe_lo}\u2013{safe_hi}",
-                                  annotation_font={"color": "#10B981", "size": 9},
-                                  annotation_position="top right")
-                    fig.add_trace(go.Scatter(
-                        x=d_dates, y=d_vals, mode="lines+markers", name=label,
-                        line={"color": color, "width": 2.5},
-                        marker={"size": 7, "color": color, "line": {"color": "white", "width": 1.5}},
-                        fill="tozeroy", fillcolor="rgba(" + ",".join(str(int(color.lstrip("#")[i*2:i*2+2],16)) for i in range(3)) + ",0.07)",
-                        hovertemplate=f"<b>%{{x}}</b><br>{label}: %{{y}}<extra></extra>",
+                                  fillcolor="rgba(16,185,129,.12)", line_width=0,
+                                  layer="below")
+                    fig.add_hline(y=safe_hi, line_dash="dash", line_color="#111827", line_width=3,
+                                  annotation_text=f"Safe Max: {safe_hi}",
+                                  annotation_position="top right",
+                                  annotation_font={"size": 12, "color": "#111827", "weight": "bold"},
+                                  layer="above")
+                    if safe_lo > 0:
+                        fig.add_hline(y=safe_lo, line_dash="dash", line_color="#111827", line_width=3,
+                                      annotation_text=f"Safe Min: {safe_lo}",
+                                      annotation_position="bottom right",
+                                      annotation_font={"size": 12, "color": "#111827", "weight": "bold"},
+                                      layer="above")
+                    fig.add_trace(go.Bar(
+                        x=x_labels, y=d_vals, name=label,
+                        marker_color=color,
+                        marker_line_width=0,
+                        text=[f"{v}" for v in d_vals],
+                        textposition='auto',
+                        hovertemplate=f"<b>%{{x}}</b><br>{label}: %{{y}}<br>Date: %{{customdata}}<extra></extra>",
+                        customdata=d_dates,
+                        opacity=0.85
                     ))
-                    if n >= 2:
-                        fig.add_trace(go.Scatter(
-                            x=d_dates, y=roll, mode="lines", name="Trend",
-                            line={"color": "#EC4899", "width": 1.5, "dash": "dot"},
-                        ))
                     fig.update_layout(
-                        title={"text": label, "font": {"size": 12, "color": "#374151", "family": "Inter"}},
-                        height=260, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(248,249,251,1)",
+                        title={"text": label, "font": {"size": 13, "color": "#374151", "family": "Inter"}},
+                        height=280, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(248,249,251,1)",
                         margin={"t": 40, "b": 40, "l": 35, "r": 15},
-                        font={"family": "Inter", "size": 10},
-                        xaxis={"showgrid": False},
+                        font={"family": "Inter", "size": 11},
+                        xaxis={"showgrid": False, "categoryorder": "array", "categoryarray": x_labels},
                         yaxis={"gridcolor": "#F0F0F0"},
-                        legend={"orientation": "h", "y": -0.35, "font": {"size": 9}},
+                        showlegend=False,
                     )
                     st.plotly_chart(fig, use_container_width=True)
     except Exception as ce:
@@ -2892,7 +2833,8 @@ def _page_profile():
         if st.button("🗑️ Delete All Data", type="primary"):
             if confirm == "DELETE":
                 try:
-                    _supabase().table("health_records").delete().eq("user_id", user_id).execute()
+                    from supabase_client import get_admin_supabase
+                    get_admin_supabase().table("health_records").delete().eq("user_id", user_id).execute()
                     st.session_state.risk_output    = None
                     st.session_state.health_data    = None
                     st.session_state.monitor_output = None
