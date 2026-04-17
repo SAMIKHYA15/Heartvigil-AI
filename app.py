@@ -2682,7 +2682,8 @@ def _page_monitoring():
                         marker_color=color,
                         marker_line_width=0,
                         text=[f"{v}" for v in d_vals],
-                        textposition='auto',
+                        textposition='inside',
+                        insidetextanchor='start',
                         hovertemplate=f"<b>%{{x}}</b><br>{label}: %{{y}}<br>Date: %{{customdata}}<extra></extra>",
                         customdata=d_dates,
                         opacity=0.85
