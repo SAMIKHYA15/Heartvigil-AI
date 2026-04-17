@@ -108,7 +108,7 @@ _scaler = None
 
 
 def _load_artifacts():
-    """Load model and scaler lazily (once per process)."""
+    """Load model lazily (once per process)."""
     global _model, _scaler
     if _model is None:
         if not os.path.exists(MODEL_PATH):
@@ -116,7 +116,11 @@ def _load_artifacts():
                 "model.joblib not found. Run train.py first."
             )
         _model  = joblib.load(MODEL_PATH)
-        _scaler = joblib.load(SCALER_PATH)
+        # Dummy scaler load kept for backward compat if needed, but not used.
+        try:
+            _scaler = joblib.load(SCALER_PATH)
+        except:
+            _scaler = None
     return _model, _scaler
 
 
@@ -378,11 +382,9 @@ def doctor_ai_agent(
     # Build 13-feature vector using DataFrame with proper column names
     feat_vec = {col: float(health_data.get(col, 0)) for col in FEATURE_COLS}
     feat_df     = pd.DataFrame([feat_vec], columns=FEATURE_COLS)
-    feat_scaled = pd.DataFrame(
-        scaler.transform(feat_df), columns=FEATURE_COLS
-    )
 
-    raw_prob = float(model.predict_proba(feat_scaled)[0][1])
+    # Pipeline automatically handles Scaling and OneHotEncoding internally
+    raw_prob = float(model.predict_proba(feat_df)[0][1])
     adj_prob, reasons = _apply_clinical_rules(raw_prob, health_data)
     label         = _label(adj_prob)
     pct           = round(adj_prob * 100, 1)
