@@ -2335,6 +2335,189 @@ def _page_data_agent():
         df_disp.columns = [c.replace("_", " ").title() for c in df_disp.columns]
         _render_styled_table(df_disp, title="Assessment Records", subtitle=f"{len(df_disp)} entries")
 
+    # ── 🔮 TREND PREDICTION (FUTURE RISK) ───────────────────────────────────────
+    st.markdown('<p class="section-title">🔮 Trend Prediction — Future Risk</p>', unsafe_allow_html=True)
+
+    # Config: metric → (label, unit, safe_hi, higher_is_worse)
+    PRED_METRICS = [
+        ("risk_score", "Risk Score",    "%",     40,   True),
+        ("trestbps",   "Blood Pressure","mmHg",  120,  True),
+        ("chol",       "Cholesterol",   "mg/dL", 200,  True),
+        ("thalach",    "Max Heart Rate","bpm",    100,  False),  # lower HR = worse
+        ("oldpeak",    "ST Depression", "mm",     1.0,  True),
+    ]
+
+    import numpy as np
+
+    predictions = []   # list of dicts for display + AI prompt
+    for col, lbl, unit, safe_hi, higher_worse in PRED_METRICS:
+        if col not in df.columns:
+            continue
+        vals = df[col].dropna().tolist()
+        if len(vals) < 2:
+            # Only 1 point — can't compute slope
+            cur = float(vals[0]) if vals else None
+            predictions.append({
+                "col": col, "label": lbl, "unit": unit,
+                "current": cur, "predicted": None, "slope": 0,
+                "direction": "stable", "higher_worse": higher_worse, "safe_hi": safe_hi,
+            })
+            continue
+        xs = np.arange(len(vals), dtype=float)
+        ys = np.array(vals, dtype=float)
+        slope, intercept = np.polyfit(xs, ys, 1)
+        predicted = intercept + slope * len(vals)   # next point projection
+        # Direction: meaningful if |slope| > 1% of mean
+        mean_val = ys.mean()
+        threshold = max(abs(mean_val) * 0.01, 0.5)
+        if slope > threshold:
+            direction = "rising"
+        elif slope < -threshold:
+            direction = "falling"
+        else:
+            direction = "stable"
+        predictions.append({
+            "col": col, "label": lbl, "unit": unit,
+            "current": float(ys[-1]), "predicted": float(predicted),
+            "slope": float(slope), "direction": direction,
+            "higher_worse": higher_worse, "safe_hi": safe_hi,
+        })
+
+    # ── Render prediction tiles ────────────────────────────────────────────────
+    def _pred_status(p):
+        """Return (icon, color, badge_text) based on direction + metric type."""
+        d, hw = p["direction"], p["higher_worse"]
+        cur   = p.get("current") or 0
+        hi    = p.get("safe_hi") or 9999
+        if d == "stable":
+            return "→", "#6B7280", "STABLE"
+        if d == "rising":
+            if hw:   # rising + higher is worse = worsening
+                return "↑", "#EF4444", "WORSENING"
+            else:    # rising + lower is worse = improving
+                return "↑", "#10B981", "IMPROVING"
+        if d == "falling":
+            if hw:   # falling + higher is worse = improving
+                return "↓", "#10B981", "IMPROVING"
+            else:    # falling + lower is worse = worsening
+                return "↓", "#EF4444", "WORSENING"
+        return "→", "#6B7280", "STABLE"
+
+    st.markdown("""
+    <style>
+    .pred-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:.85rem; margin-bottom:1.4rem; }
+    .pred-tile {
+        background:#fff; border:1.5px solid #EDE9FE; border-radius:16px;
+        padding:1.1rem 1rem; text-align:center;
+        box-shadow:0 2px 12px rgba(107,70,193,.08);
+        transition:transform .15s;
+    }
+    .pred-tile:hover { transform:translateY(-2px); box-shadow:0 6px 20px rgba(107,70,193,.14); }
+    .pred-label { font-size:.68rem; font-weight:700; color:#6B7280; text-transform:uppercase;
+                  letter-spacing:.06em; margin-bottom:.4rem; }
+    .pred-arrow { font-size:2rem; font-weight:900; line-height:1; margin-bottom:.2rem; }
+    .pred-cur   { font-size:1.2rem; font-weight:900; color:#1E1B2E; }
+    .pred-unit  { font-size:.65rem; color:#9CA3AF; }
+    .pred-next  { font-size:.75rem; color:#6B7280; margin:.3rem 0 .5rem; }
+    .pred-badge {
+        display:inline-block; border-radius:999px; padding:.12rem .65rem;
+        font-size:.62rem; font-weight:800; letter-spacing:.07em;
+    }
+    .pred-ai-card {
+        background:linear-gradient(135deg,#F5F3FF,#EDE9FE);
+        border:1.5px solid #DDD6FE; border-radius:16px;
+        padding:1.3rem 1.6rem; margin-bottom:1rem;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    if len(df) < 2:
+        st.info("Need at least 2 assessments to compute trend predictions. Complete another assessment to unlock this feature.", icon="ℹ️")
+    else:
+        # Build tile HTML
+        tiles_html = '<div class="pred-grid">'
+        for p in predictions:
+            icon, color, badge = _pred_status(p)
+            cur_str  = f"{p['current']:.1f}" if p['current'] is not None else "—"
+            pred_str = f"{p['predicted']:.1f}" if p['predicted'] is not None else "—"
+            badge_bg = {"WORSENING": "rgba(239,68,68,.12)", "IMPROVING": "rgba(16,185,129,.12)", "STABLE": "rgba(107,114,128,.10)"}[badge]
+            tiles_html += (
+                '<div class="pred-tile">'
+                '<div class="pred-label">' + p['label'] + '</div>'
+                '<div class="pred-arrow" style="color:' + color + ';">' + icon + '</div>'
+                '<div class="pred-cur">' + cur_str + ' <span class="pred-unit">' + p['unit'] + '</span></div>'
+                '<div class="pred-next">Next est. <strong>' + pred_str + '</strong> ' + p['unit'] + '</div>'
+                '<span class="pred-badge" style="background:' + badge_bg + ';color:' + color + ';">' + badge + '</span>'
+                '</div>'
+            )
+        tiles_html += '</div>'
+        st.markdown(tiles_html, unsafe_allow_html=True)
+
+        # ── AI Narrative ──────────────────────────────────────────────────────
+        pred_cache_key = f"pred_narrative_{_user_id()}"
+        if st.button("🔮 Get AI Prediction Narrative", type="primary", key="pred_ai_btn"):
+            with st.spinner("Analysing trend projections…"):
+                try:
+                    from ai_helper import call_groq
+                    # Build a compact summary for the LLM
+                    pred_lines = []
+                    for p in predictions:
+                        icon, _, badge = _pred_status(p)
+                        pred_lines.append(
+                            f"- {p['label']}: current={p['current']:.1f}{p['unit']}, "
+                            f"projected next={p['predicted']:.1f}{p['unit']}, "
+                            f"trend={badge} ({icon}, slope={p['slope']:+.2f}/assessment)"
+                        )
+                    pred_text = "\n".join(pred_lines)
+
+                    system = (
+                        "You are a compassionate AI heart health assistant. "
+                        "Given linear trend projections of a patient's cardiac metrics, "
+                        "write 3-4 plain-English sentences interpreting what these trends mean "
+                        "for their near-future heart health. "
+                        "Mention which metrics are most concerning. "
+                        "Be empathetic and action-oriented. No diagnosis or prescriptions. "
+                        "End with one clear, positive call-to-action."
+                    )
+                    user_msg = (
+                        f"Patient has {len(df)} assessments. Linear trend projections:\n"
+                        + pred_text
+                    )
+                    narrative = call_groq(
+                        system_prompt=system, user_prompt=user_msg,
+                        fallback="", max_tokens=250, temperature=0.3,
+                    )
+                    st.session_state[pred_cache_key] = narrative
+                except Exception as _e:
+                    st.error(f"AI narrative failed: {_e}")
+                    narrative = ""
+        else:
+            narrative = st.session_state.get(pred_cache_key, "")
+
+        if narrative:
+            st.markdown(
+                '<div class="pred-ai-card">'
+                '<div style="font-size:.72rem;font-weight:700;color:#6B46C1;'
+                'text-transform:uppercase;letter-spacing:.07em;margin-bottom:.6rem;">'
+                '🤖 AI Prediction Narrative</div>'
+                '<div style="font-size:.9rem;color:#1E1B2E;line-height:1.7;">' + narrative + '</div>'
+                '<div style="font-size:.65rem;color:#9CA3AF;margin-top:.8rem;">'
+                '⚕️ Projections are mathematical estimates only — not medical advice.</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div style="background:#F9F7FF;border:1.5px dashed #DDD6FE;border-radius:12px;'
+                'padding:1rem;text-align:center;color:#9CA3AF;font-size:.83rem;">'
+                'Click <strong style="color:#6B46C1;">Get AI Prediction Narrative</strong> '
+                'above to get a plain-English interpretation of where your metrics are heading.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
