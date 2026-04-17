@@ -1,20 +1,14 @@
 # Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
+*.py[cod]
 *.so
-*.egg
-*.egg-info/
-dist/
-build/
+.Python
 
-# Environment
+# Virtual environments
 .env
 .venv
-env/
 venv/
+ENV/
 
 # IDE
 .vscode/
@@ -22,10 +16,18 @@ venv/
 *.swp
 *.swo
 
-# Project specific
-*.joblib
-*.pkl
-*.db
-
-# Logs
+# Logs and databases
 *.log
+*.db
+*.pkl
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit (keep the config but not secrets)
+.streamlit/secrets.toml
