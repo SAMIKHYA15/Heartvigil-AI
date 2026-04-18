@@ -887,14 +887,315 @@ def _get_or_create_user(email: str) -> Optional[Dict]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  HELPERS  ─  PDF REPORT GENERATION
+#  HELPERS  ─  PDF REPORT GENERATION  (Premium Design)
 # ══════════════════════════════════════════════════════════════════════════════
 def _generate_pdf_report(
-    user_email:   str,
-    health_data:  Dict,
-    risk_output:  Dict,
-    reco_output:  Dict,
+    user_email:  str,
+    health_data: Dict,
+    risk_output: Dict,
+    reco_output: Dict,
+    *_args,                 # absorb extra positional args from old call sites
 ) -> bytes:
+    """Generate a premium, branded PDF assessment report using ReportLab."""
+    try:
+        from reportlab.lib.pagesizes  import A4
+        from reportlab.lib            import colors
+        from reportlab.lib.units      import cm, mm
+        from reportlab.platypus       import (
+            BaseDocTemplate, PageTemplate, Frame,
+            Paragraph, Spacer, Table, TableStyle,
+            HRFlowable, KeepTogether,
+        )
+        from reportlab.lib.styles     import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums      import TA_CENTER, TA_LEFT, TA_RIGHT
+        from reportlab.pdfgen         import canvas as rl_canvas
+
+        PAGE_W, PAGE_H = A4
+        MARGIN = 1.8 * cm
+
+        # ── Brand colours ────────────────────────────────────────────────────
+        C_PURPLE      = colors.HexColor("#6B46C1")
+        C_PURPLE_DARK = colors.HexColor("#4C1D95")
+        C_PURPLE_LITE = colors.HexColor("#EDE9FE")
+        C_DARK        = colors.HexColor("#1E1B2E")
+        C_MUTED       = colors.HexColor("#6B7280")
+        C_BORDER      = colors.HexColor("#E5E7EB")
+        C_WHITE       = colors.white
+        C_BG          = colors.HexColor("#F9F7FF")
+        RISK_COLORS   = {
+            "HIGH":    colors.HexColor("#EF4444"),
+            "MEDIUM":  colors.HexColor("#F59E0B"),
+            "LOW":     colors.HexColor("#10B981"),
+            "UNKNOWN": colors.HexColor("#6B7280"),
+        }
+        RISK_BG = {
+            "HIGH":    colors.HexColor("#FEF2F2"),
+            "MEDIUM":  colors.HexColor("#FFFBEB"),
+            "LOW":     colors.HexColor("#ECFDF5"),
+            "UNKNOWN": colors.HexColor("#F3F4F6"),
+        }
+
+        rl  = risk_output.get("risk_label", "UNKNOWN")
+        rc  = RISK_COLORS.get(rl, C_PURPLE)
+        rbg = RISK_BG.get(rl, C_BG)
+        prob = risk_output.get("probability_percent",
+               risk_output.get("risk_pct", 0))
+        try:   prob = float(prob)
+        except: prob = 0.0
+
+        now_str = datetime.datetime.now().strftime("%B %d, %Y  –  %I:%M %p")
+
+        # ── Page header / footer callbacks ───────────────────────────────────
+        HEADER_H = 1.6 * cm
+        FOOTER_H = 1.0 * cm
+
+        def _draw_header(canv, doc):
+            canv.saveState()
+            # Purple background bar
+            canv.setFillColor(C_PURPLE_DARK)
+            canv.rect(0, PAGE_H - HEADER_H, PAGE_W, HEADER_H, fill=1, stroke=0)
+            # Accent strip
+            canv.setFillColor(C_PURPLE)
+            canv.rect(0, PAGE_H - HEADER_H, 6*mm, HEADER_H, fill=1, stroke=0)
+            # Brand name
+            canv.setFillColor(C_WHITE)
+            canv.setFont("Helvetica-Bold", 13)
+            canv.drawString(1.2*cm, PAGE_H - HEADER_H + 0.45*cm, "❤  HeartVigil AI")
+            # Subtitle
+            canv.setFont("Helvetica", 8)
+            canv.setFillColor(colors.HexColor("#C4B5FD"))
+            canv.drawString(1.2*cm, PAGE_H - HEADER_H + 0.15*cm, "Heart Disease Risk Assessment Report")
+            # Date — right aligned
+            canv.setFont("Helvetica", 8)
+            canv.setFillColor(colors.HexColor("#DDD6FE"))
+            canv.drawRightString(PAGE_W - 1.2*cm, PAGE_H - HEADER_H + 0.35*cm, now_str)
+            canv.restoreState()
+
+        def _draw_footer(canv, doc):
+            canv.saveState()
+            canv.setStrokeColor(C_BORDER)
+            canv.setLineWidth(0.4)
+            canv.line(MARGIN, FOOTER_H + 0.3*cm, PAGE_W - MARGIN, FOOTER_H + 0.3*cm)
+            canv.setFont("Helvetica-Oblique", 7)
+            canv.setFillColor(C_MUTED)
+            canv.drawString(MARGIN, 0.35*cm,
+                "⚠  AI-generated for educational purposes only — not a substitute for professional medical advice.")
+            canv.setFont("Helvetica", 7)
+            canv.drawRightString(PAGE_W - MARGIN, 0.35*cm,
+                f"Page {doc.page}  |  Patient: {user_email}")
+            canv.restoreState()
+
+        def _on_page(canv, doc):
+            _draw_header(canv, doc)
+            _draw_footer(canv, doc)
+
+        # ── Document setup ────────────────────────────────────────────────────
+        buf = io.BytesIO()
+        frame = Frame(
+            MARGIN,
+            FOOTER_H + 0.6*cm,
+            PAGE_W - 2*MARGIN,
+            PAGE_H - HEADER_H - FOOTER_H - 1.2*cm,
+            id="main",
+        )
+        tmpl  = PageTemplate(id="main", frames=[frame], onPage=_on_page)
+        doc   = BaseDocTemplate(buf, pagesize=A4, pageTemplates=[tmpl])
+
+        # ── Style helpers ─────────────────────────────────────────────────────
+        SS = getSampleStyleSheet()
+
+        def PS(name, **kw):
+            return ParagraphStyle(name, parent=SS["Normal"], **kw)
+
+        h1_s   = PS("h1",  fontSize=20, fontName="Helvetica-Bold",
+                    textColor=C_PURPLE_DARK, alignment=TA_CENTER, spaceAfter=4)
+        h2_s   = PS("h2",  fontSize=12, fontName="Helvetica-Bold",
+                    textColor=C_PURPLE_DARK, spaceBefore=14, spaceAfter=5)
+        body_s = PS("body", fontSize=9.5, textColor=C_DARK, leading=14)
+        small_s= PS("sm",  fontSize=8,  textColor=C_MUTED, leading=12)
+        bold_s = PS("bold",fontSize=9.5, fontName="Helvetica-Bold", textColor=C_DARK)
+        center_s=PS("ctr", fontSize=9.5, textColor=C_DARK, alignment=TA_CENTER)
+
+        story = [Spacer(1, 0.3*cm)]
+
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        #  1. RISK BANNER
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        risk_banner_data = [[
+            Paragraph(
+                f'<font size="22"><b>{rl}</b></font><br/>'
+                f'<font size="11" color="#555555">Risk Level</font>',
+                PS("rb", alignment=TA_CENTER, leading=26)
+            ),
+            Paragraph(
+                f'<font size="22"><b>{prob:.1f}%</b></font><br/>'
+                f'<font size="11" color="#555555">Probability</font>',
+                PS("pb", alignment=TA_CENTER, leading=26)
+            ),
+            Paragraph(
+                f'<font size="14"><b>{now_str.split("–")[0].strip()}</b></font><br/>'
+                f'<font size="11" color="#555555">Assessment Date</font>',
+                PS("db", alignment=TA_CENTER, leading=22)
+            ),
+        ]]
+        banner_tbl = Table(risk_banner_data,
+                           colWidths=[(PAGE_W - 2*MARGIN) / 3] * 3)
+        banner_tbl.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (0, 0), rc),
+            ("TEXTCOLOR",     (0, 0), (0, 0), C_WHITE),
+            ("BACKGROUND",    (1, 0), (1, 0), C_PURPLE_LITE),
+            ("TEXTCOLOR",     (1, 0), (1, 0), C_PURPLE_DARK),
+            ("BACKGROUND",    (2, 0), (2, 0), C_BG),
+            ("TEXTCOLOR",     (2, 0), (2, 0), C_DARK),
+            ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING",    (0, 0), (-1, -1), 14),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 14),
+            ("LINEAFTER",     (0, 0), (1, 0), 1, C_BORDER),
+            ("BOX",           (0, 0), (-1, -1), 0.5, C_BORDER),
+            ("ROUNDEDCORNERS",[8]),
+        ]))
+        story += [banner_tbl, Spacer(1, 0.5*cm)]
+
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        #  2. CLINICAL RISK FACTORS
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        reasons = risk_output.get("reasons",
+                  risk_output.get("clinical_reasons", []))
+        if reasons:
+            section_block = [Paragraph("Key Clinical Risk Factors", h2_s)]
+            rows = [[
+                Paragraph('<font color="#6B46C1"><b>▸</b></font>', PS("dot", fontSize=11)),
+                Paragraph(r, body_s),
+            ] for r in reasons]
+            factor_tbl = Table(rows, colWidths=[0.5*cm, (PAGE_W - 2*MARGIN - 0.5*cm)])
+            factor_tbl.setStyle(TableStyle([
+                ("VALIGN",        (0,0), (-1,-1), "TOP"),
+                ("TOPPADDING",    (0,0), (-1,-1), 3),
+                ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+                ("LEFTPADDING",   (0,0), (-1,-1), 0),
+            ]))
+            # Wrap in a light purple box
+            wrapper = Table([[factor_tbl]],
+                            colWidths=[PAGE_W - 2*MARGIN])
+            wrapper.setStyle(TableStyle([
+                ("BACKGROUND",    (0,0), (0,0), C_PURPLE_LITE),
+                ("BOX",           (0,0), (0,0), 1.5, C_PURPLE),
+                ("LEFTPADDING",   (0,0), (0,0), 10),
+                ("RIGHTPADDING",  (0,0), (0,0), 10),
+                ("TOPPADDING",    (0,0), (0,0), 8),
+                ("BOTTOMPADDING", (0,0), (0,0), 8),
+                ("ROUNDEDCORNERS",[6]),
+            ]))
+            section_block += [wrapper, Spacer(1, 0.4*cm)]
+            story.append(KeepTogether(section_block))
+
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        #  3. AI EXPLANATION
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        ai_exp = risk_output.get("ai_explanation", "")
+        if ai_exp:
+            ai_block = [Paragraph("AI Health Explanation", h2_s)]
+            ai_wrap = Table(
+                [[Paragraph(
+                    '<font color="#4C1D95"><b>🤖 AI</b></font><br/>' + ai_exp,
+                    PS("aib", fontSize=9.5, textColor=C_DARK, leading=14)
+                )]],
+                colWidths=[PAGE_W - 2*MARGIN],
+            )
+            ai_wrap.setStyle(TableStyle([
+                ("BACKGROUND",    (0,0), (0,0), colors.HexColor("#F5F3FF")),
+                ("LEFTBORDER",    (0,0), (0,0), 3, C_PURPLE),
+                ("BOX",           (0,0), (0,0), 0.5, C_BORDER),
+                ("LEFTPADDING",   (0,0), (0,0), 12),
+                ("RIGHTPADDING",  (0,0), (0,0), 12),
+                ("TOPPADDING",    (0,0), (0,0), 10),
+                ("BOTTOMPADDING", (0,0), (0,0), 10),
+                ("ROUNDEDCORNERS",[6]),
+            ]))
+            ai_block += [ai_wrap, Spacer(1, 0.5*cm)]
+            story.append(KeepTogether(ai_block))
+
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        #  4. HEALTH METRICS TABLE
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        labels = {
+            "age":     "Age",              "sex":     "Sex  (1=Male, 0=Female)",
+            "cp":      "Chest Pain Type",  "trestbps":"Resting BP (mmHg)",
+            "chol":    "Cholesterol (mg/dL)", "fbs":  "Fasting BS > 120 mg/dL",
+            "restecg": "Resting ECG",      "thalach": "Max Heart Rate (bpm)",
+            "exang":   "Exercise Angina",  "oldpeak": "ST Depression (mm)",
+            "slope":   "ST Slope",         "ca":      "Major Vessels Colored",
+            "thal":    "Thalassemia",
+        }
+        metric_rows = [[
+            Paragraph("Metric", PS("mhdr", fontName="Helvetica-Bold", fontSize=9.5,
+                                   textColor=C_WHITE, alignment=TA_LEFT)),
+            Paragraph("Value",  PS("mhdr", fontName="Helvetica-Bold", fontSize=9.5,
+                                   textColor=C_WHITE, alignment=TA_CENTER)),
+        ]]
+        for k, v in health_data.items():
+            if k in labels:
+                metric_rows.append([
+                    Paragraph(labels[k], body_s),
+                    Paragraph(str(v), center_s),
+                ])
+
+        COL_W = PAGE_W - 2*MARGIN
+        m_tbl = Table(metric_rows, colWidths=[COL_W * 0.65, COL_W * 0.35])
+        m_tbl.setStyle(TableStyle([
+            ("BACKGROUND",    (0,0), (-1,0), C_PURPLE),
+            ("TEXTCOLOR",     (0,0), (-1,0), C_WHITE),
+            ("FONTNAME",      (0,0), (-1,0), "Helvetica-Bold"),
+            ("ROWBACKGROUNDS",(0,1), (-1,-1), [C_WHITE, C_PURPLE_LITE]),
+            ("GRID",          (0,0), (-1,-1), 0.4, C_BORDER),
+            ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
+            ("TOPPADDING",    (0,0), (-1,-1), 7),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 7),
+            ("LEFTPADDING",   (0,0), (-1,-1), 10),
+        ]))
+        story.append(Paragraph("Health Metrics", h2_s))
+        story += [m_tbl, Spacer(1, 0.5*cm)]
+
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        #  5. RECOMMENDATIONS
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        tips = reco_output.get("tips", []) if reco_output else []
+        if tips:
+            story.append(Paragraph("Personalised Recommendations", h2_s))
+            reco_rows = []
+            for i, tip in enumerate(tips, 1):
+                reco_rows.append([
+                    Paragraph(
+                        f'<font color="#6B46C1"><b>{i}</b></font>',
+                        PS("num", fontSize=10, fontName="Helvetica-Bold", alignment=TA_CENTER)
+                    ),
+                    Paragraph(tip, body_s),
+                ])
+            reco_tbl = Table(reco_rows, colWidths=[0.7*cm, COL_W - 0.7*cm])
+            reco_tbl.setStyle(TableStyle([
+                ("VALIGN",        (0,0), (-1,-1), "TOP"),
+                ("TOPPADDING",    (0,0), (-1,-1), 4),
+                ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+                ("LEFTPADDING",   (1,0), (1,-1), 6),
+                ("BACKGROUND",    (0,0), (0,-1), C_PURPLE_LITE),
+                ("ALIGN",         (0,0), (0,-1), "CENTER"),
+            ]))
+            story += [reco_tbl, Spacer(1, 0.5*cm)]
+
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        #  Build
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        doc.build(story)
+        return buf.getvalue()
+
+    except ImportError:
+        return b""
+    except Exception as exc:
+        logger.error("PDF generation error: %s", exc, exc_info=True)
+        return b""
+
+
     """Generate a professional PDF assessment report using ReportLab."""
     try:
         from reportlab.lib.pagesizes import A4
