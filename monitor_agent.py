@@ -28,9 +28,9 @@ SAFE_RANGES: Dict[str, Tuple[float, float, str]] = {
     "chol":     (0,   200,  "mg/dL"),
     "thalach":  (60,  100,  "bpm"),
     "oldpeak":  (0,   1.0,  "mm"),
-    "ca":       (0,   0,    "vessels"),
-    "fbs":      (0,   0,    "(0=normal)"),
-    "exang":    (0,   0,    "(0=normal)"),
+    "ca":       (0,   0.5,  "vessels"),   # 0 = safe, >=1 = concern
+    "fbs":      (0,   0.5,  "(0=normal)"),# 0 = normal, 1 = high sugar
+    "exang":    (0,   0.5,  "(0=normal)"),# 0 = no angina, 1 = angina
 }
 
 METRIC_LABELS: Dict[str, str] = {

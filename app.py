@@ -15,8 +15,10 @@ import random
 import string
 import logging
 import datetime
+import traceback
 import requests
 from typing import Any, Dict, List, Optional
+from monitor_agent import build_comparison_chart_data
 # ========== COMPATIBILITY WRAPPERS ==========
 # For data_agent compatibility
 try:
@@ -1736,14 +1738,14 @@ def _comparison_chart(chart_data: List[Dict]) -> go.Figure:
     fig.add_trace(go.Scatter(
         x=metrics, y=safe_hi,
         mode="markers+lines",
-        name="Safe Range Upper",
+        name="Safe Upper",
         line={"color": "#6B46C1", "dash": "dot", "width": 1.5},
         marker={"size": 6},
     ))
     fig.add_trace(go.Scatter(
         x=metrics, y=safe_lo,
         mode="markers+lines",
-        name="Safe Range Lower",
+        name="Safe Lower",
         line={"color": "#A78BFA", "dash": "dot", "width": 1.5},
         marker={"size": 6},
     ))
@@ -1897,7 +1899,34 @@ def _page_dashboard():
             _show_latest_assessment_tab()
 
 
+
+def _risk_one_liner(label: str, pct: float, reasons: list) -> str:
+    """Return a single-sentence explanation for the risk level shown in the card."""
+    top = reasons[0] if reasons else ""
+    # Trim the reason to a short phrase (first clause before ' —' or ',')
+    short = top.split(" —")[0].split(",")[0].strip() if top else ""
+
+    if label == "LOW":
+        base = f"Your heart disease probability is just <strong>{pct:.1f}%</strong> — well within the safe zone."
+        if short:
+            base += f" Key protective factor: {short}."
+        else:
+            base += " Keep up your current healthy habits."
+    elif label == "MEDIUM":
+        base = f"A <strong>{pct:.1f}%</strong> probability signals moderate risk — action now can prevent escalation."
+        if short:
+            base += f" Primary concern: {short}."
+    else:  # HIGH
+        base = f"At <strong>{pct:.1f}%</strong>, your risk is elevated and requires prompt attention."
+        if short:
+            base += f" Main driver: {short}."
+        else:
+            base += " Please consult a cardiologist as soon as possible."
+    return base
+
+
 def _show_latest_assessment_tab():
+
     ro = st.session_state.risk_output
     hd = st.session_state.health_data
     if not ro or not hd:
@@ -1920,8 +1949,14 @@ def _show_latest_assessment_tab():
           <div style="font-size:2rem;font-weight:800;">{pct:.1f}%</div>
         </div>
       </div>
+      <div style="margin-top:.75rem;padding:.6rem .85rem;
+                  background:rgba(255,255,255,.55);border-radius:8px;
+                  font-size:.87rem;color:#1E1B2E;line-height:1.55;">
+        {_risk_one_liner(label, pct, ro.get("reasons", []))}
+      </div>
     </div>
     """, unsafe_allow_html=True)
+
 
     col1, col2 = st.columns([1, 1])
     with col1:
@@ -2361,7 +2396,7 @@ def _page_risk_analysis():
                 </div>
                 """, unsafe_allow_html=True)
     elif dir_info.get("direction") == "first":
-        st.info("🆕 This is your first assessment. Future assessments will show your progress.", icon="🆕")
+        st.info("This is your first assessment. Future assessments will show your progress.", icon="🆕")
 
     # Risk banner
     st.markdown(f"""
@@ -2427,7 +2462,6 @@ def _page_risk_analysis():
         st.plotly_chart(fig_fi, use_container_width=True)
 
     # Comparison chart
-    from monitor_agent import build_comparison_chart_data
     cdata = build_comparison_chart_data(pd.Series(hd))
     if cdata:
         st.markdown('<p class="section-title">📈 Your Values vs Safe Ranges</p>', unsafe_allow_html=True)
@@ -2841,7 +2875,6 @@ def _page_monitoring():
         st.session_state.monitor_output = monitor_out
     except Exception as exc:
         st.error(f"Monitoring agent error: {exc}")
-        import traceback
         st.code(traceback.format_exc(), language="bash")
         return
 
@@ -2958,16 +2991,24 @@ def _page_monitoring():
     with hg2:
         risk_label = latest.get("risk_label") or "N/A"
         rl_color   = {"HIGH": "#EF4444", "MEDIUM": "#F59E0B", "LOW": "#10B981"}.get(risk_label, "#6B46C1")
+        _mon_ro     = st.session_state.risk_output or {}
+        _ra_reasons = _mon_ro.get("reasons", _mon_ro.get("clinical_reasons", []))
+        _ra_liner   = _risk_one_liner(risk_label, risk_pct, _ra_reasons)
         st.markdown(f"""
         <div style="background:{rl_color}12;border:1.5px solid {rl_color}44;
-                    border-radius:16px;padding:1.4rem 1.2rem;text-align:center;height:190px;
-                    display:flex;flex-direction:column;align-items:center;justify-content:center;">
+                    border-radius:16px;padding:1.2rem 1.2rem 1rem;text-align:center;">
           <div style="font-size:.78rem;color:#6c757d;font-weight:600;text-transform:uppercase;letter-spacing:.07em;">Current Risk</div>
           <div style="font-size:2.6rem;font-weight:900;color:{rl_color};line-height:1.1;margin:.3rem 0;">{risk_label}</div>
           <div style="font-size:1.1rem;font-weight:700;color:{rl_color};">{risk_pct:.1f}%</div>
-          <div style="font-size:.76rem;color:#6c757d;margin-top:.4rem;">{n_filt} assessments tracked</div>
+          <div style="font-size:.76rem;color:#6c757d;margin-top:.3rem;">{n_filt} assessments tracked</div>
+          <div style="margin-top:.6rem;padding:.45rem .7rem;
+                      background:rgba(255,255,255,.6);border-radius:8px;
+                      font-size:.75rem;color:#1E1B2E;line-height:1.5;text-align:left;">
+            {_ra_liner}
+          </div>
         </div>
         """, unsafe_allow_html=True)
+
 
     with hg3:
         st.markdown(f"""
@@ -3202,13 +3243,39 @@ def _page_monitoring():
         subtitle=f"{len(df_show)} records • newest first",
     )
 
-    # ─── CSV download ──────────────────────────────────────────────────────────
+    # ─── Export buttons ────────────────────────────────────────────────────────
     csv_buf = df.drop(columns=["id","user_id"], errors="ignore").to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "\U0001f4e5 Export Records as CSV", data=csv_buf,
-        file_name=f"heartvigil_monitoring_{datetime.date.today()}.csv",
-        mime="text/csv", use_container_width=False,
-    )
+    _ecol1, _ecol2 = st.columns([1, 1])
+    with _ecol1:
+        st.download_button(
+            "📥 Export Records as CSV", data=csv_buf,
+            file_name=f"heartvigil_monitoring_{datetime.date.today()}.csv",
+            mime="text/csv", use_container_width=True,
+        )
+    with _ecol2:
+        try:
+            _latest = df.sort_values("created_at").iloc[-1].to_dict()
+            _rl = _latest.get("risk_label") or "UNKNOWN"
+            if _rl not in ("HIGH", "MEDIUM", "LOW"): _rl = "UNKNOWN"
+            _rs = float(_latest.get("risk_score") or 0)
+            _dummy_risk = {
+                "risk_label": _rl,
+                "probability_percent": _rs,
+                "clinical_reasons": ["Monitoring snapshot — historical record."],
+                "ai_explanation": "",
+            }
+            _mon_pdf = _generate_pdf_report(
+                st.session_state.user.get("email", ""),
+                _latest, _dummy_risk, {},
+            )
+            if _mon_pdf:
+                st.download_button(
+                    "📄 Export Report as PDF", data=_mon_pdf,
+                    file_name=f"heartvigil_monitoring_{datetime.date.today()}.pdf",
+                    mime="application/pdf", use_container_width=True,
+                )
+        except Exception as _pe:
+            logger.warning("Monitoring PDF export failed: %s", _pe)
 
 
 
